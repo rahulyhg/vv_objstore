@@ -23,10 +23,15 @@ logging.basicConfig(
 
 from vedavaapi.common import VedavaapiService
 
+ServiceObj = None
+
 class VedavaapiUllekhanam(VedavaapiService):
-    def __init__(self, name, conf):
-        super(VedavaapiUllekhanam, self).__init__(name, conf)
+    dependency_services = ['store']
+
+    def __init__(self, registry, name, conf):
+        super(VedavaapiUllekhanam, self).__init__(registry, name, conf)
         self.vvstore = VedavaapiServices.lookup("store")
+        import_blueprints_after_service_is_ready(self)
         
     def setup(self):
         for db_details in self.config["ullekhanam_dbs"]:
@@ -43,7 +48,19 @@ class VedavaapiUllekhanam(VedavaapiService):
                     os.system("rm -rf " + db_details["file_store"])
                 except Exception as e:
                     logging.error("Error removing " + db_details["file_store"]+": "+ e)
-        
-from .api_v1 import api_blueprint as apiv1_blueprint
 
-api_blueprints = [apiv1_blueprint]
+def myservice():
+    return ServiceObj
+
+def get_store():
+    return myservice().vvstore
+
+api_blueprints = []
+
+def import_blueprints_after_service_is_ready(service_obj):
+    global ServiceObj
+    ServiceObj = service_obj
+    from .api_v1 import api_blueprint as apiv1_blueprint
+    api_blueprints.append(apiv1_blueprint)
+
+

@@ -40,7 +40,7 @@ api = flask_restplus.Api(app=api_blueprint, version='1.0', title='vedavaapi py u
                                      'Please also see videos <a href="https://www.youtube.com/playlist?list=PL63uIhJxWbghuZDlqwRLpPoPPFDNQppR6">here</a>, <a href="https://docs.google.com/presentation/d/1Wx1rxf5W5VpvSS4oGkGpp28WPPM57CUx41dGHC4ed80/edit">slides</a>,  <a href="http://sanskrit-data.readthedocs.io/en/latest/sanskrit_data_schema.html#class-diagram" > class diagram </a> as well as the sources ( <a href="http://sanskrit-data.readthedocs.io/en/latest/_modules/sanskrit_data/schema/books.html#BookPortion">example</a> ) - It might help you understand the schema more easily.<BR>'
                                      'A list of REST and non-REST API routes avalilable on this server: <a href="../sitemap">sitemap</a>. ',
                          default_label=api_blueprint.name,
-                         prefix=URL_PREFIX, doc='/docs')
+                         prefix=URL_PREFIX)
 
 def is_extension_allowed(filename, allowed_extensions_with_dot):
   [fname, ext] = os.path.splitext(filename)
