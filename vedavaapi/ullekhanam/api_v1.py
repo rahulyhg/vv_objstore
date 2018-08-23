@@ -17,11 +17,12 @@ from PIL import Image
 from docimage import DocImage
 import flask_restplus
 from werkzeug.datastructures import FileStorage
+from werkzeug.utils import secure_filename
 import sanskrit_data.schema.common as common_data_containers
 from flask import Blueprint, request
 from sanskrit_data.schema.common import JsonObject
 
-from vedavaapi.common import *
+from vedavaapi.common import check_permission, get_user
 from sanskrit_data.schema import common, books, ullekhanam
 from vedavaapi.ullekhanam.backend import get_db
 
@@ -118,7 +119,7 @@ class BookList(flask_restplus.Resource):
 
     # Check the files
     for uploaded_file in request.files.getlist("in_files"):
-      input_filename = os.path.basename(uploaded_file.filename)
+      input_filename = secure_filename(os.path.basename(uploaded_file.filename))
       allowed_extensions = {".jpg", ".png", ".gif"}
       if not is_extension_allowed(input_filename, allowed_extensions):
         message = {
@@ -143,7 +144,7 @@ class BookList(flask_restplus.Resource):
         page_storage_path = page.get_external_storage_path(db_interface=db)
         logging.debug(page_storage_path)
 
-        input_filename = os.path.basename(uploaded_file.filename)
+        input_filename = secure_filename(os.path.basename(uploaded_file.filename))
         logging.debug(input_filename)
         original_file_path = os.path.join(page_storage_path, "original__" + input_filename)
         if not os.path.exists(os.path.dirname(original_file_path)):
