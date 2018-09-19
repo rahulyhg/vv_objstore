@@ -36,27 +36,36 @@ class VedavaapiUllekhanam(VedavaapiService):
         self.vvstore = VedavaapiServices.lookup("store")
         import_blueprints_after_service_is_ready(self)
 
-    def setup(self):
+    def setup(self, repos=None):
+        if repos is None:
+            repos = self.vvstore.all_repos()
+
         db_name_end = self.config.get('ullekhanam_db')
         file_store_base_path = self.config.get('file_store')
-        self.dbs_map = self.vvstore.db_interfaces_from_all_repos(
+        self.dbs_map = self.vvstore.db_interfaces_from_repos(
             db_name_end=db_name_end,
             db_name_frontend='ullekhanam',
             file_store_base_path=file_store_base_path,
             db_type="ullekhanam_db"
         )
         for repo, db in self.dbs_map.items():
+            if repo not in repos:
+                continue
             BookPortion.add_indexes(db_interface=db)
             TextAnnotation.add_indexes(db_interface=db)
 
 
-    def reset(self):
+    def reset(self, repos=None):
+        if repos is None:
+            repos = self.vvstore.all_repos()
+
         db_name_end = self.config.get('ullekhanam_db')
         file_store_base_path = self.config.get('file_store')
-        self.vvstore.delete_db_in_all_repos(
+        self.vvstore.delete_db_in_repos(
             db_name_end=db_name_end,
             delete_external_file_store=True,
-            file_store_base_path=file_store_base_path
+            file_store_base_path=file_store_base_path,
+            repos=repos
         )
 
     def get_db(self, repo_id):

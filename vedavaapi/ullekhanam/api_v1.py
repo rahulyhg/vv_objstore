@@ -70,7 +70,7 @@ def is_extension_allowed(filename, allowed_extensions_with_dot):
 json_node_model = api.model('JsonObjectNode', common_data_containers.JsonObjectNode.schema)
 
 
-@api.route('/dbs/books')
+@api.route('/books')
 class BookList(flask_restplus.Resource):
     get_parser = api.parser()
     get_parser.add_argument('pattern', location='args', type='string', default=None)
@@ -207,7 +207,7 @@ class BookList(flask_restplus.Resource):
         return book_portion_node.to_json_map(), 200
 
 
-@api.route('/dbs/pages/<string:page_id>/annotations')
+@api.route('/pages/<string:page_id>/annotations')
 class AllPageAnnotationsHandler(flask_restplus.Resource):
     @api.doc(
         responses={404: 'id not found'})
@@ -227,10 +227,16 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
         if page is None:
             return "No such book portion id", 404
         else:
+            '''
             page_image = DocImage.from_path(path=os.path.join(page.get_external_storage_path(db_interface=db),
                                                               page.list_files(db_interface=db,
                                                                               suffix_pattern="content*")[0]))
-            image_annotations = db.update_image_annotations(page=page, page_image=page_image)
+            '''
+            page_image = DocImage.from_path(path=os.path.join(page.get_external_storage_path(db_interface=db), 'content.jpg'))
+            #image_annotations = db.update_image_annotations(page=page, page_image=page_image)
+            image_annotations = self.update_image_annotations(db, page, page_image)
+            #print(page.list_files(db_interface=db, suffix_pattern="content*"))
+
             image_annotation_nodes = [common_data_containers.JsonObjectNode.from_details(content=annotation) for
                                       annotation in
                                       image_annotations]
@@ -238,9 +244,47 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
                 node.fill_descendents(db_interface=db)
             return common_data_containers.JsonObject.get_json_map_list(image_annotation_nodes), 200
 
+    @classmethod
+    def update_image_annotations(cls, db_interface, page, page_image):
+        known_annotations = page.get_targetting_entities(
+            db_interface=db_interface,
+            entity_type=ullekhanam.ImageAnnotation.get_wire_typeid())
+        if len(known_annotations):
+            logging.warning("Annotations exist. Not detecting and merging.")
+            return known_annotations
+
+        detected_regions, images_details = page_image.find_text_regions()
+        new_annotations = []
+        def region_to_rectangle(region):
+            return ullekhanam.Rectangle.from_details(
+                x=int(region[0]),
+                y=int(region[1]),
+                w=int(region[2]-region[0]),
+                h=int(region[3]-region[1])
+            )
+        for region in detected_regions:
+            if hasattr(region, 'score'):
+                del region.score
+            target = ullekhanam.ImageTarget.from_details(
+                container_id=page._id,
+                rectangle=region_to_rectangle(region)
+            )
+            annotation = ullekhanam.ImageAnnotation.from_details(
+                targets = [target],
+                source=ullekhanam.DataSource.from_details(
+                    source_type='system_inferred',
+                    id='pyCV2'
+                )
+            )
+            annotation = annotation.update_collection(db_interface)
+            new_annotations.append(annotation)
+
+        return new_annotations
+
+
 
 # noinspection PyUnresolvedReferences,PyShadowingBuiltins
-@api.route('/dbs/entities/<string:id>/targetters')
+@api.route('/entities/<string:id>/targetters')
 @api.param('id', 'Hint: Get one from the JSON object returned by another GET call. ')
 class EntityTargettersHandler(flask_restplus.Resource):
     get_parser = api.parser()
@@ -280,7 +324,7 @@ class EntityTargettersHandler(flask_restplus.Resource):
 
 
 # noinspection PyUnresolvedReferences
-@api.route('/dbs/entities/<string:id>')
+@api.route('/entities/<string:id>')
 @api.param('id', 'Hint: Get one from the JSON object returned by another GET call. ')
 class EntityHandler(flask_restplus.Resource):
     get_parser = api.parser()
@@ -314,7 +358,7 @@ class EntityHandler(flask_restplus.Resource):
             return node.to_json_map(), 200
 
 
-@api.route('/dbs/entities/<string:id>/files')
+@api.route('/entities/<string:id>/files')
 @api.param('id', 'Hint: Get one from the JSON object returned by another GET call. ')
 class EntityFileListHandler(flask_restplus.Resource):
     get_parser = api.parser()
@@ -345,7 +389,7 @@ class EntityFileListHandler(flask_restplus.Resource):
             return entity.list_files(db_interface=db, suffix_pattern=args["pattern"]), 200
 
 
-@api.route('/dbs/entities/<string:id>/files/<string:file_name>')
+@api.route('/entities/<string:id>/files/<string:file_name>')
 @api.param('id', 'Hint: Get one from the JSON object returned by another GET call. ')
 @api.param('file_name', 'Hint: Get one from the file list returned by another GET call. ')
 class EntityFileHandler(flask_restplus.Resource):
@@ -374,7 +418,7 @@ class EntityFileHandler(flask_restplus.Resource):
             return send_from_directory(directory=entity.get_external_storage_path(db_interface=db), filename=file_name)
 
 
-@api.route('/dbs/entities')
+@api.route('/entities')
 class EntityListHandler(flask_restplus.Resource):
     # input_node = api.model('JsonObjectNode', common_data_containers.JsonObjectNode.schema)
 
@@ -479,6 +523,19 @@ class SchemaListHandler(flask_restplus.Resource):
         schemas.update(common.get_schemas(books))
         schemas.update(common.get_schemas(ullekhanam))
         return schemas, 200
+
+''''
+@api.route('/dbs/<path:path>')
+class ApiChangeInfo(flask_restplus.Resource):
+    
+    def get(self, path):
+        return 'api is changed. please remove "/dbs" in all ullekhanam api urls or prefixes', 403
+    def post(self, path):
+        return self.get(path)
+    def delete(self, path):
+        return self.delete(path)
+'''
+
 
 
 __all__ = ["api_blueprint"]
