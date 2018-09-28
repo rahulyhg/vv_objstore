@@ -84,7 +84,7 @@ setup(
     'flask', 'flask-restplus', 'flask-oauthlib', 'flask-cors',
     'furl',
     'pymongo', 'cloudant', 'sanskrit_data',
-    'jsonpickle', 'jinja2', 'Pillow', 'werkzeug', 'jsonschema',
+    'jsonpickle', 'jinja2', 'Pillow', 'werkzeug', 'jsonschema', 'docimage'
   ],
   # For manual installation, the same list:
   # sanskrit_data flask flask-restplus flask-cors flask-oauthlib furl docimage jsonpickle jinja2 opencv-python Pillow werkzeug jsonschema

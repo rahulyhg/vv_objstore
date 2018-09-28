@@ -15,14 +15,13 @@ from os.path import join
 
 from PIL import Image
 from docimage import DocImage
-import flask_restplus, flask
+import flask_restplus
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 import sanskrit_data.schema.common as common_data_containers
-from flask import Blueprint, request, session
-from sanskrit_data.schema.common import JsonObject
+from flask import Blueprint, request
 
-from vedavaapi.common import check_permission, get_user
+from vedavaapi.common.api_common import check_permission, get_user, check_and_get_repo_name, error_response
 from sanskrit_data.schema import common, books, ullekhanam
 
 from . import myservice
@@ -32,22 +31,31 @@ logging.basicConfig(
     format="%(levelname)s: %(asctime)s {%(filename)s:%(lineno)d}: %(message)s "
 )
 
+
 def get_db():
-    repo_id = session.get('repo_id', myservice().vvstore.default_repo)
-    if repo_id is None:
-        response = flask.make_response(
-            flask.jsonify({'error': 'repo not setted!'}),
-            404
-        )
-        flask.abort(response)
-    elif repo_id not in myservice().vvstore.all_repos():
-        response = flask.make_response(
-            flask.jsonify({'error': 'invalid repo! resetting it'}),
-            404
-        )
-        del session['repo_id']
-        flask.abort(response)
-    return myservice().get_db(repo_id)
+    repo_name = check_and_get_repo_name()
+    return myservice().db(repo_name)
+
+
+def books_store_path(base_path):
+    repo_name = check_and_get_repo_name()
+    return os.path.join(myservice().books_path(repo_name), base_path)
+
+
+def page_store_path(page):
+    return books_store_path(page._id)
+
+
+def list_files(base_path, suffix_pattern):
+    return myservice().vvstore.list_files(
+        books_store_path(base_path),
+        suffix_pattern
+    )
+
+
+def list_files_under_entity(entity, suffix_pattern):
+    return list_files(entity._id, suffix_pattern)
+
 
 URL_PREFIX = '/v1'
 api_blueprint = Blueprint(name='ullekhanam_api', import_name=__name__)
@@ -85,7 +93,7 @@ class BookList(flask_restplus.Resource):
         """
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message='No such repo id', code=404)
         booklist = [book.to_json_map() for book in db.list_books()]
         # logging.debug(booklist)
         return booklist, 200
@@ -111,13 +119,13 @@ class BookList(flask_restplus.Resource):
         :return: Book details in a json tree like:
           {"content": BookPortionObj, "children": [JsonObjectNode with BookPortion_Pg1, JsonObjectNode with BookPortion_Pg2]}
         """
-        from vedavaapi.common import check_permission
+        from vedavaapi.common.api_common import check_permission
         if not check_permission(db_name=myservice().name):
-            return "", 401
+            return error_response(message='Unauthorized', code=401)
 
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message='No such repo id', code=404)
 
         book_json = request.form.get("book_json")
         logging.info(book_json)
@@ -125,29 +133,18 @@ class BookList(flask_restplus.Resource):
         # To avoid having to do rollbacks, we try to prevalidate the data to the maximum extant possible.
         book = common_data_containers.JsonObject.make_from_pickledstring(book_json)
         if book.base_data != "image" or not isinstance(book, books.BookPortion):
-            message = {
-                "message": "Only image books can be uploaded with this API."
-            }
-            return message, 417
+            return error_response(message='Only image books can be uploaded with this API', code=417)
 
         if hasattr(book, "_id"):
-            message = {
-                "message": "overwriting " + book._id + " is not allowed."
-            }
-            logging.warning(str(message))
-            return message, 405
+            return error_response(message='overwriting {} is not allowed'.format(book._id), code=405)
 
         # Check the files
         for uploaded_file in request.files.getlist("in_files"):
             input_filename = secure_filename(os.path.basename(uploaded_file.filename))
             allowed_extensions = {".jpg", ".png", ".gif"}
             if not is_extension_allowed(input_filename, allowed_extensions):
-                message = {
-                    "message": "Only these extensions are allowed: %(exts)s, but filename is %(input_filename)s" % dict(
-                        exts=str(allowed_extensions), input_filename=input_filename),
-                }
-                logging.error(message)
-                return message, 418
+                return error_response(message="Only these extensions are allowed: %(exts)s, but filename is %(input_filename)s" % dict(
+                        exts=str(allowed_extensions), input_filename=input_filename), code=418)
 
         # Book is validated here.
         book = book.update_collection(db_interface=db, user=get_user())
@@ -162,7 +159,7 @@ class BookList(flask_restplus.Resource):
                     targets=[books.BookPositionTarget.from_details(position=page_index, container_id=book._id)]
                 )
                 page = page.update_collection(db_interface=db, user=get_user())
-                page_storage_path = page.get_external_storage_path(db_interface=db)
+                page_storage_path = page_store_path(page)
                 print(page_storage_path)
 
                 input_filename = secure_filename(os.path.basename(uploaded_file.filename))
@@ -190,16 +187,16 @@ class BookList(flask_restplus.Resource):
                 img.save(out, "JPEG", quality=100)
                 out.close()
         except:
-            message = {
+            error = {
                 "message": "Unexpected error while saving files: " + str(sys.exc_info()[0]),
                 "details": traceback.format_exc()
             }
-            logging.error(str(message))
+            logging.error(str(error))
             logging.error(traceback.format_exc())
             book_portion_node = common_data_containers.JsonObjectNode.from_details(content=book)
             logging.error("Rolling back and deleting the book!")
             book_portion_node.delete_in_collection(db_interface=db)
-            return message, 419
+            return error_response(code=419, **error)
 
         book_portion_node = common_data_containers.JsonObjectNode.from_details(content=book)
         book_portion_node.fill_descendents(db_interface=db)
@@ -222,20 +219,15 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
         logging.info("page get by id = " + str(page_id))
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         page = common_data_containers.JsonObject.from_id(id=page_id, db_interface=db)
         if page is None:
-            return "No such book portion id", 404
+            return error_response(message="No such book portion id", code=404)
         else:
-            '''
-            page_image = DocImage.from_path(path=os.path.join(page.get_external_storage_path(db_interface=db),
-                                                              page.list_files(db_interface=db,
-                                                                              suffix_pattern="content*")[0]))
-            '''
-            page_image = DocImage.from_path(path=os.path.join(page.get_external_storage_path(db_interface=db), 'content.jpg'))
-            #image_annotations = db.update_image_annotations(page=page, page_image=page_image)
+            page_image = DocImage.from_path(path=os.path.join(page_store_path(page), 'content.jpg'))
+            # image_annotations = db.update_image_annotations(page=page, page_image=page_image)
             image_annotations = self.update_image_annotations(db, page, page_image)
-            #print(page.list_files(db_interface=db, suffix_pattern="content*"))
+            # print(page.list_files(db_interface=db, suffix_pattern="content*"))
 
             image_annotation_nodes = [common_data_containers.JsonObjectNode.from_details(content=annotation) for
                                       annotation in
@@ -255,12 +247,13 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
 
         detected_regions, images_details = page_image.find_text_regions()
         new_annotations = []
-        def region_to_rectangle(region):
+
+        def region_to_rectangle(reg):
             return ullekhanam.Rectangle.from_details(
-                x=int(region[0]),
-                y=int(region[1]),
-                w=int(region[2]-region[0]),
-                h=int(region[3]-region[1])
+                x=int(reg[0]),
+                y=int(reg[1]),
+                w=int(reg[2] - reg[0]),
+                h=int(reg[3] - reg[1])
             )
         for region in detected_regions:
             if hasattr(region, 'score'):
@@ -270,7 +263,7 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
                 rectangle=region_to_rectangle(region)
             )
             annotation = ullekhanam.ImageAnnotation.from_details(
-                targets = [target],
+                targets= [target],
                 source=ullekhanam.DataSource.from_details(
                     source_type='system_inferred',
                     id='pyCV2'
@@ -280,7 +273,6 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
             new_annotations.append(annotation)
 
         return new_annotations
-
 
 
 # noinspection PyUnresolvedReferences,PyShadowingBuiltins
@@ -313,7 +305,7 @@ class EntityTargettersHandler(flask_restplus.Resource):
         logging.debug(args["filter_json"])
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         targetters = entity.get_targetting_entities(db_interface=db, entity_type=args["targetter_class"])
         targetter_nodes = [
             common_data_containers.JsonObjectNode.from_details(content=annotation)
@@ -350,7 +342,7 @@ class EntityHandler(flask_restplus.Resource):
             return "No such repo id", 404
         entity = common_data_containers.JsonObject.from_id(id=id, db_interface=db)
         if entity is None:
-            return "No such entity id", 404
+            return error_response(message="No such entity id", code=404)
         else:
             node = common_data_containers.JsonObjectNode.from_details(content=entity)
             node.fill_descendents(db_interface=db, depth=args['depth'])
@@ -381,12 +373,13 @@ class EntityFileListHandler(flask_restplus.Resource):
         logging.info("entity get by id = " + id)
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         entity = common_data_containers.JsonObject.from_id(id=id, db_interface=db)
         if entity is None:
             return "No such entity id", 404
         else:
-            return entity.list_files(db_interface=db, suffix_pattern=args["pattern"]), 200
+            # return entity.list_files(db_interface=db, suffix_pattern=args["pattern"]), 200
+            return list_files_under_entity(entity, args["pattern"]), 200
 
 
 @api.route('/entities/<string:id>/files/<string:file_name>')
@@ -409,13 +402,13 @@ class EntityFileHandler(flask_restplus.Resource):
         logging.info("entity get by id = " + id)
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         entity = common_data_containers.JsonObject.from_id(id=id, db_interface=db)
         if entity is None:
-            return "No such entity id", 404
+            return error_response(message="No such entity id", code=404)
         else:
             from flask import send_from_directory
-            return send_from_directory(directory=entity.get_external_storage_path(db_interface=db), filename=file_name)
+            return send_from_directory(directory=page_store_path(entity), filename=file_name)
 
 
 @api.route('/entities')
@@ -431,7 +424,7 @@ class EntityListHandler(flask_restplus.Resource):
         """ Get all matching entities- Currently unimplemented."""
         args = self.get_parser.parse_args()
         logging.debug(args["filter_json"])
-        return "NOT IMPLEMENTED!", 401
+        return error_response(message="NOT IMPLEMENTED!", code=401)
 
     post_parser = api.parser()
     post_parser.add_argument('jsonStr', location='json')
@@ -465,24 +458,24 @@ class EntityListHandler(flask_restplus.Resource):
         nodes = common_data_containers.JsonObject.make_from_dict_list(request.json)
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         for node in nodes:
             from jsonschema import ValidationError
             # noinspection PyUnusedLocal,PyUnusedLocal
             try:
                 node.update_collection(db_interface=db, user=get_user())
             except ValidationError as e:
-                message = {
+                error = {
                     "message": "Some input object does not fit the schema.",
                     "exception_dump": (traceback.format_exc())
                 }
-                return message, 417
+                return error_response(code=417, **error)
             except common_data_containers.TargetValidationError as e:
-                message = {
+                error = {
                     "message": "Target validation failed.",
                     "exception_dump": (traceback.format_exc())
                 }
-                return message, 418
+                return error_response(code=418, **error)
         return common_data_containers.JsonObject.get_json_map_list(nodes), 200
 
     @api.expect(post_parser, validate=False)
@@ -506,7 +499,7 @@ class EntityListHandler(flask_restplus.Resource):
         nodes = common_data_containers.JsonObject.make_from_dict_list(request.json)
         db = get_db()
         if db is None:
-            return "No such repo id", 404
+            return error_response(message="No such repo id", code=404)
         for node in nodes:
             node.delete_in_collection(db_interface=db, user=get_user())
         return {}, 200
@@ -523,18 +516,6 @@ class SchemaListHandler(flask_restplus.Resource):
         schemas.update(common.get_schemas(books))
         schemas.update(common.get_schemas(ullekhanam))
         return schemas, 200
-
-''''
-@api.route('/dbs/<path:path>')
-class ApiChangeInfo(flask_restplus.Resource):
-    
-    def get(self, path):
-        return 'api is changed. please remove "/dbs" in all ullekhanam api urls or prefixes', 403
-    def post(self, path):
-        return self.get(path)
-    def delete(self, path):
-        return self.delete(path)
-'''
 
 
 
