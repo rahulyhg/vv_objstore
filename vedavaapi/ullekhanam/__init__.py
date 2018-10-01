@@ -11,7 +11,7 @@ from sanskrit_data.schema import *  # pylint: disable=unused-import.
 from sanskrit_data.schema.books import BookPortion
 from sanskrit_data.schema.ullekhanam import TextAnnotation
 
-from vedavaapi.common import VedavaapiService, ServiceRepoInterface
+from vedavaapi.common import VedavaapiService, ServiceRepo
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,20 +21,17 @@ logging.basicConfig(
 # Dummy usage.
 # logging.debug("So that depickling works well, we imported: " + str([common, ullekhanam, books, users]))
 
-ServiceObj = None
 
-
-class UllekhanamRepoInterface(ServiceRepoInterface):
+class UllekhanamRepo(ServiceRepo):
     def __init__(self, service, repo_name):
-        super(UllekhanamRepoInterface, self).__init__(service, repo_name)
+        super(UllekhanamRepo, self).__init__(service, repo_name)
 
         self.db_name_suffix = self.service.config.get('ullekhanam_db')
         self.books_base_path = self.service.config.get('books_base_path')
 
-        self.ullekhanam_db = self.db(
-            db_name_suffix=self.db_name_suffix,
-            db_type='ullekhanam_db'
-        )
+        self.ullekhanam_db = self.db(db_name_suffix=self.db_name_suffix)
+        self.ullekhanam_colln = self.ullekhanam_db.get_collection(self.service.config.get('ullekhanam_primary_colln'))
+
         self.books_path = self.store.file_store_path(
             repo_name= self.repo_name,
             service_name= self.service.name,
@@ -43,11 +40,11 @@ class UllekhanamRepoInterface(ServiceRepoInterface):
         )  # dirs will get created automatically
 
     def initialize(self):
-        BookPortion.add_indexes(self.ullekhanam_db)
-        TextAnnotation.add_indexes(self.ullekhanam_db)
+        BookPortion.add_indexes(self.ullekhanam_colln)
+        TextAnnotation.add_indexes(self.ullekhanam_colln)
 
     def reset(self):
-        self.store.delete_db(
+        self.store.drop_db(
             repo_name=self.repo_name,
             db_name_suffix=self.db_name_suffix
         )
@@ -55,33 +52,21 @@ class UllekhanamRepoInterface(ServiceRepoInterface):
 
 
 class VedavaapiUllekhanam(VedavaapiService):
+
+    instance = None
+
     dependency_services = ['store', 'users']
-    repo_interface_class = UllekhanamRepoInterface
+    svc_repo_class = UllekhanamRepo
+
+    title = "Vedavaapi Ullekhanam"
+    description = "Multi-layered annotator for Indic documents"
 
     def __init__(self, registry, name, conf):
         super(VedavaapiUllekhanam, self).__init__(registry, name, conf)
         self.vvstore = self.registry.lookup("store")
-        import_blueprints_after_service_is_ready(self)
 
-    def db(self, repo_name):
-        return self.get_repo(repo_name).ullekhanam_db
+    def colln(self, repo_name):
+        return self.get_repo(repo_name).ullekhanam_colln
 
     def books_path(self, repo_name):
         return self.get_repo(repo_name).books_path
-
-
-def myservice():
-    return ServiceObj
-
-def get_store():
-    return myservice().vvstore
-
-
-api_blueprints = []
-
-
-def import_blueprints_after_service_is_ready(service_obj):
-    global ServiceObj
-    ServiceObj = service_obj
-    from .api_v1 import api_blueprint as apiv1_blueprint
-    api_blueprints.append(apiv1_blueprint)
