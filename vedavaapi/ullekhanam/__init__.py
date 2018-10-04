@@ -26,11 +26,11 @@ class UllekhanamRepo(ServiceRepo):
     def __init__(self, service, repo_name):
         super(UllekhanamRepo, self).__init__(service, repo_name)
 
-        self.db_name_suffix = self.service.config.get('ullekhanam_db')
+        self.ullekhanam_db_config = self.dbs_config['ullekhanam_db']
         self.books_base_path = self.service.config.get('books_base_path')
 
-        self.ullekhanam_db = self.db(db_name_suffix=self.db_name_suffix)
-        self.ullekhanam_colln = self.ullekhanam_db.get_collection(self.service.config.get('ullekhanam_primary_colln'))
+        self.ullekhanam_db = self.db(self.ullekhanam_db_config['name'])
+        self.ullekhanam_colln = self.ullekhanam_db.get_collection(self.ullekhanam_db_config['collections']['ullekhanam'])
 
         self.books_path = self.store.file_store_path(
             repo_name= self.repo_name,
@@ -42,13 +42,6 @@ class UllekhanamRepo(ServiceRepo):
     def initialize(self):
         BookPortion.add_indexes(self.ullekhanam_colln)
         TextAnnotation.add_indexes(self.ullekhanam_colln)
-
-    def reset(self):
-        self.store.drop_db(
-            repo_name=self.repo_name,
-            db_name_suffix=self.db_name_suffix
-        )
-        self.store.delete_data(self.repo_name, self.service.name)
 
 
 class VedavaapiUllekhanam(VedavaapiService):

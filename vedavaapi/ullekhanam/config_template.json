@@ -1,5 +1,12 @@
 {
-    "ullekhanam_db": "ullekhanam",
-    "ullekhanam_primary_colln": "ullekhanam",
+    "dbs": {
+      "ullekhanam_db": {
+          "name": "ullekhanam",
+          "collections": {
+              "ullekhanam": "ullekhanam"
+          }
+      }
+    },
+
     "books_base_path": "books"
 }

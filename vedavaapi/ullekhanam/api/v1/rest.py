@@ -93,7 +93,7 @@ class BookList(flask_restplus.Resource):
 
         # To avoid having to do rollbacks, we try to prevalidate the data to the maximum extant possible.
         book = common_data_containers.JsonObject.make_from_pickledstring(book_json)
-        if book.base_data != "image" or not isinstance(book, books.BookPortion):
+        if (not hasattr(book, 'base_data')) or book.base_data != "image" or not isinstance(book, books.BookPortion):
             return error_response(message='Only image books can be uploaded with this API', code=417)
 
         if hasattr(book, "_id"):
