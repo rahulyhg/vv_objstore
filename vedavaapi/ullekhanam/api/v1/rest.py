@@ -167,8 +167,12 @@ class BookList(flask_restplus.Resource):
 
 @api.route('/pages/<string:page_id>/annotations')
 class AllPageAnnotationsHandler(flask_restplus.Resource):
+
+    get_parser = api.parser()
+    get_parser.add_argument('force_if_not_system_inferred', location='args', type=int, default=0)
     @api.doc(
         responses={404: 'id not found'})
+    @api.expect(get_parser, validate=True)
     def get(self, page_id):
         """ Get all annotations (pre existing or automatically generated, using
         image segmentation) for this page image.
@@ -178,13 +182,14 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
           {"content": ImageAnnotation, "children": [JsonObjectNode with TextAnnotation_1]}
         """
         logging.info("page get by id = " + str(page_id))
+        args = self.get_parser.parse_args()
         colln = get_colln()
         page = common_data_containers.JsonObject.from_id(id=page_id, my_collection=colln)
         if page is None:
             return error_response(message="No such book portion id", code=404)
         else:
             page_image = DocImage.from_path(path=os.path.join(page_dir_path(page), 'content.jpg'))
-            image_annotations = self.update_image_annotations(colln, page, page_image)
+            image_annotations = self.update_image_annotations(colln, page, page_image, bool(args.get('force_if_not_system_inferred', 0)))
 
             image_annotation_nodes = [common_data_containers.JsonObjectNode.from_details(content=annotation) for
                                       annotation in
@@ -194,13 +199,19 @@ class AllPageAnnotationsHandler(flask_restplus.Resource):
             return common_data_containers.JsonObject.get_json_map_list(image_annotation_nodes), 200
 
     @classmethod
-    def update_image_annotations(cls, my_collection, page, page_image):
+    def update_image_annotations(cls, my_collection, page, page_image, force_if_not_system_inferred=False):
         known_annotations = page.get_targetting_entities(
             my_collection=my_collection,
             entity_type=ullekhanam.ImageAnnotation.get_wire_typeid())
         if len(known_annotations):
-            logging.warning("Annotations exist. Not detecting and merging.")
-            return known_annotations
+            if force_if_not_system_inferred:
+                known_si_annotations = list(filter(lambda x: x.source.source_type == 'system_inferred', known_annotations))
+                if len(known_si_annotations):
+                    logging.warning("Annotations exist. Not detecting and merging.")
+                    return known_annotations
+            else:
+                logging.warning("Annotations exist. Not detecting and merging.")
+                return known_annotations
 
         detected_regions, images_details = page_image.find_text_regions()
         new_annotations = []
