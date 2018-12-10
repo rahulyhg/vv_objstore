@@ -5,6 +5,12 @@
           "collections": {
               "ullekhanam": "ullekhanam"
           }
+      },
+      "ullekhanam_db_new": {
+        "name": "ullekhanam2",
+        "collections": {
+          "ullekhanam": "ullekhanam"
+        }
       }
     },
 
