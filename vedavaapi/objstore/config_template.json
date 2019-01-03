@@ -1,0 +1,12 @@
+{
+    "dbs": {
+      "objstore_db": {
+          "name": "objstore",
+          "collections": {
+              "objstore": "objstore"
+          }
+      }
+    },
+
+    "books_base_path": "books"
+}

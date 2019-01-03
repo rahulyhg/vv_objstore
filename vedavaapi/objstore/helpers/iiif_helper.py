@@ -2,23 +2,24 @@ from collections import OrderedDict
 
 from sanskrit_ld.helpers import db_helper
 from sanskrit_ld.schema import JsonObject
+from vedavaapi.objectdb.mydb import MyDbCollection
 
 from vedavaapi.iiif_image.loris.resolver import ServiceFSHelper
 from vedavaapi.iiif_presentation.prezed.sevices_helper import ServicePreziInterface
 
 
 def myservice():
-    from . import VedavaapiUllekhanam
-    return VedavaapiUllekhanam.instance
+    from .. import VedavaapiObjstore
+    return VedavaapiObjstore.instance
 
 
-class UllekhanamPreziInterface(ServicePreziInterface):
+class ObjstorePreziInterface(ServicePreziInterface):
 
-    service_name = 'ullekhanam'
+    service_name = 'objstore'
 
-    def __init__(self, repo_name):
-        super(UllekhanamPreziInterface, self).__init__(repo_name)
-        self.colln = myservice().colln(self.repo_name)
+    def __init__(self, org_name):
+        super(ObjstorePreziInterface, self).__init__(org_name)
+        self.colln = myservice().colln(self.org_name)  # type: MyDbCollection
 
     def collection_details(self, collection_id):
         # meta, objects
@@ -29,7 +30,9 @@ class UllekhanamPreziInterface(ServicePreziInterface):
 
     def object_details(self, object_id):
         # meta, default_sequence_id, sequence_ids
-        obj = db_helper.read_by_id(self.colln, object_id)
+        obj = self.colln.get(object_id)
+        if obj is None:
+            return None
         obj_meta = {
             "metadata": obj.get("metadata", []),
         }
@@ -53,7 +56,9 @@ class UllekhanamPreziInterface(ServicePreziInterface):
     def canvas_details(self, sequence_id, canvas_id):
         # meta, image_id or (image_ids and dimensions)
         # TODO optimize url
-        spr = db_helper.read_by_id(self.colln, canvas_id)
+        spr = self.colln.get(canvas_id)
+        if spr is None:
+            return None
         label = spr.get('label', spr.get('jsonClassLabel:', 'page:'))  # TODO
         meta = {
             "metadata": spr.get("metadata", [])
@@ -76,7 +81,7 @@ class UllekhanamPreziInterface(ServicePreziInterface):
         ops = OrderedDict([
             ('sort', [[["title.chars", 1]]])
         ])
-        books = db_helper.read_and_do(self.colln, {"jsonClass": "BookPortion"}, ops=ops, fields=['_id', 'title.chars'])
+        books = self.colln.find_and_do({"jsonClass": "BookPortion"}, ops=ops, projection={'_id': 1, 'title.chars': 1})
 
         return {
             "meta": {
@@ -86,33 +91,34 @@ class UllekhanamPreziInterface(ServicePreziInterface):
         }
 
     def _default_sequence_details(self, object_id):
-        pages = db_helper.read_and_do(
-            self.colln, {"jsonClass": "Page", "source": object_id}, ops=OrderedDict(), fields=['_id']
+        pages = self.colln.find_and_do(
+            {"jsonClass": "Page", "source": object_id}, ops=OrderedDict(), projection={'_id': 1}
         )
 
         return {
             "canvas_ids": [page['_id'] for page in pages]
         }
 
+    # noinspection PyMethodMayBeStatic
     def _index_metadata(self, repr):
         if 'metadata' in repr:
             repr['metadata'] = dict([(mi['label'], mi['value']) for mi in repr['metadata']])
 
 
-class UllekhanamFSHelper(ServiceFSHelper):
+class ObjstoreFSHelper(ServiceFSHelper):
 
-    def __init__(self, repo_name):
-        super(UllekhanamFSHelper, self).__init__(repo_name)
+    def __init__(self, org_name):
+        super(ObjstoreFSHelper, self).__init__(org_name)
 
-        self.colln = myservice().colln(self.repo_name)
+        self.colln = myservice().colln(self.org_name)
 
     def resolve_to_absolute_path(self, file_anno_id):
-        file_anno = JsonObject.make_from_dict(db_helper.read_by_id(self.colln, file_anno_id))
+        file_anno = JsonObject.make_from_dict(self.colln.get(file_anno_id, projection={"permissions": 0}))
         if file_anno is None:
             return None
 
         custodian_resource_id = file_anno.target
         file_path_in_resource_scope = file_anno.body.path
         file_path = myservice().resource_file_path(
-            self.repo_name, custodian_resource_id, file_path_in_resource_scope)
+            self.org_name, custodian_resource_id, file_path_in_resource_scope)
         return file_path
