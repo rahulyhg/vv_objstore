@@ -218,7 +218,7 @@ class SpecificResources(flask_restplus.Resource):
         check_argument_type(filter_doc, (dict,), key='filter_doc')
 
         projection = jsonify_argument(args['projection'], key='projection')
-        check_argument_type(projection, (list,), key='projection', allow_none=True)
+        check_argument_type(projection, (dict,), key='projection', allow_none=True)
 
         associated_resources_request_doc = jsonify_argument(args['associated_resources'], 'associated_resources')
         check_argument_type(associated_resources_request_doc, (dict,), key='associated_resources', allow_none=True)
@@ -268,7 +268,7 @@ class Annotations(flask_restplus.Resource):
         check_argument_type(filter_doc, (dict,), key='filter_doc')
 
         projection = jsonify_argument(args['projection'], key='projection')
-        check_argument_type(projection, (list,), key='projection', allow_none=True)
+        check_argument_type(projection, (dict,), key='projection', allow_none=True)
 
         associated_resources_request_doc = jsonify_argument(args['associated_resources'], 'associated_resources')
         check_argument_type(associated_resources_request_doc, (dict,), key='associated_resources', allow_none=True)
@@ -318,7 +318,7 @@ class Files(flask_restplus.Resource):
         check_argument_type(filter_doc, (dict,), key='filter_doc')
 
         projection = jsonify_argument(args['projection'], key='projection')
-        check_argument_type(projection, (list,), key='projection', allow_none=True)
+        check_argument_type(projection, (dict,), key='projection', allow_none=True)
 
         file_annos = db_helper.files(colln, resource_id, filter_doc=filter_doc, projection=projection)
         for f in file_annos:
