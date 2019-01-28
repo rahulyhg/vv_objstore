@@ -8,7 +8,6 @@ def myservice():
     return VedavaapiObjstore.instance
 
 
-# methods acessing db
 def get_colln():
     org_name = get_current_org()
     colln = myservice().colln(org_name)  # type: MyDbCollection

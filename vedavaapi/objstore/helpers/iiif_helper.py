@@ -1,8 +1,8 @@
 from collections import OrderedDict
 
-from sanskrit_ld.helpers import db_helper
 from sanskrit_ld.schema import JsonObject
 from vedavaapi.objectdb.mydb import MyDbCollection
+from vedavaapi.objectdb import objstore_helper
 
 from vedavaapi.iiif_image.loris.resolver import ServiceFSHelper
 from vedavaapi.iiif_presentation.prezed.sevices_helper import ServicePreziInterface
@@ -67,12 +67,12 @@ class ObjstorePreziInterface(ServicePreziInterface):
             'label': label
         })
 
-        source_images = db_helper.files(self.colln, canvas_id)
-        source_image_ids = [file['_id'] for file in source_images]
+        source_image = self.colln.find_one(objstore_helper.files_selector_doc(canvas_id), projection={"_id": 1})
+        source_image_id = source_image['_id'] if source_image else None
         self._index_metadata(meta)
         return {
             "meta": meta,
-            "image_id": source_image_ids[0] if len(source_image_ids) else None
+            "image_id": source_image_id
         }
 
     def _default_collection_details(self):
