@@ -23,14 +23,31 @@ class ObjstorePreziInterface(ServicePreziInterface):
 
     def collection_details(self, collection_id):
         # meta, objects
-        # TODO should implement collections
-        if collection_id != 'books':
+        if collection_id == 'books':
+            # deprecated
+            return self._default_collection_details()
+
+        collection = self.colln.find_one(
+            {"jsonClass": "Library", "_id": collection_id}, projection={"permissions": 0})
+        if collection is None:
             return None
-        return self._default_collection_details()
+
+        sub_collection_ids = [
+            sc['_id']
+            for sc in self.colln.find({"jsonClass": "Library", "source": collection_id}, projection={"_id": 1})]
+        manifests_ids = [
+            mn['_id']
+            for mn in self.colln.find({"jsonClass": "BookPortion", "source": collection_id}, projection={"_id": 1})]
+
+        return {
+            "meta": {"label": collection.get('name', collection_id)},
+            "sub_collection_ids": sub_collection_ids,
+            "object_ids": manifests_ids
+        }
 
     def object_details(self, object_id):
         # meta, default_sequence_id, sequence_ids
-        obj = self.colln.get(object_id)
+        obj = self.colln.get(object_id, projection={"permissions": 0})
         if obj is None:
             return None
         obj_meta = {
@@ -56,7 +73,7 @@ class ObjstorePreziInterface(ServicePreziInterface):
     def canvas_details(self, sequence_id, canvas_id):
         # meta, image_id or (image_ids and dimensions)
         # TODO optimize url
-        spr = self.colln.get(canvas_id)
+        spr = self.colln.get(canvas_id, projection={"permissions": 0})
         if spr is None:
             return None
         label = spr.get('label', spr.get('jsonClassLabel:', 'page:'))  # TODO
