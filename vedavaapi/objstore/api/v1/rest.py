@@ -9,9 +9,10 @@ from werkzeug.datastructures import FileStorage
 
 from sanskrit_ld.helpers.permissions_helper import PermissionResolver
 from sanskrit_ld.schema import JsonObject
-from sanskrit_ld.schema.base import ObjectPermissions
+from sanskrit_ld.schema.base import ObjectPermissions, Permission
 
-from vedavaapi.common.api_common import jsonify_argument, error_response, check_argument_type, abort_with_error_response
+from vedavaapi.common.api_common import jsonify_argument, error_response, check_argument_type, \
+    abort_with_error_response, get_current_org, get_user, get_group
 from vedavaapi.common.api_common import get_current_user_id, get_current_user_group_ids, get_initial_agents
 from vedavaapi.objectdb import objstore_helper as objstore_helper
 
@@ -30,10 +31,10 @@ def _validate_projection(projection):
 
 def get_requested_resources(args):
     colln = get_colln()
-    current_user_id = get_current_user_id(required=True)
+    current_user_id = get_current_user_id(required=False)
     current_user_group_ids = get_current_user_group_ids()
 
-    selector_doc = jsonify_argument(args['selector_doc'], key='selector_doc')
+    selector_doc = jsonify_argument(args.get('selector_doc', None), key='selector_doc') or {}
     check_argument_type(selector_doc, (dict,), key='selector_doc')
 
     projection = jsonify_argument(args.get('projection', None), key='projection')
@@ -60,6 +61,9 @@ def get_requested_resources(args):
     except (TypeError, ValueError):
         error = error_response(message='arguments to operations seems invalid', code=400)
         abort_with_error_response(error)
+    except Exception as e:
+        error = error_response(message='invalid arguments', code=400)
+        abort_with_error_response(error)
 
     if lrs_request_doc is not None:
         # noinspection PyUnboundLocalVariable
@@ -75,7 +79,7 @@ class Resources(flask_restplus.Resource):
     white_listed_classes = ('JsonObject', 'WrapperObject', 'FileAnnotation', 'User', 'UsersGroup')
 
     get_parser = api.parser()
-    get_parser.add_argument('selector_doc', location='args', type=str, required=True)
+    get_parser.add_argument('selector_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
     get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
@@ -220,7 +224,7 @@ class ResourceObject(flask_restplus.Resource):
     def get(self, resource_id):
         args = self.get_parser.parse_args()
         colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
+        current_user_id = get_current_user_id(required=False)
         current_user_group_ids = get_current_user_group_ids()
 
         lrs_request_doc = jsonify_argument(args['linked_resources'], 'linked_resources')
@@ -251,7 +255,7 @@ class ResourceObject(flask_restplus.Resource):
 class SpecificResources(flask_restplus.Resource):
 
     get_parser = api.parser()
-    get_parser.add_argument('filter_doc', location='args', type=str)
+    get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
     get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
@@ -295,7 +299,7 @@ class SpecificResources(flask_restplus.Resource):
 class Annotations(flask_restplus.Resource):
 
     get_parser = api.parser()
-    get_parser.add_argument('filter_doc', location='args', type=str)
+    get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
     get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
@@ -335,11 +339,86 @@ class Annotations(flask_restplus.Resource):
         }
 
 
+@api.route('/resources/<string:resource_id>/permitted_agents')
+class PermittedAgents(flask_restplus.Resource):
+
+    post_parser = api.parser()
+    post_parser.add_argument('action', location='form', type=str, required=True, choices=ObjectPermissions.ACTIONS)
+    post_parser.add_argument(
+        'agents_set_name', location='form', type=str, required=True, choices=[Permission.GRANTED, Permission.WITHDRAWN])
+    post_parser.add_argument('user_ids', location='form', type=str, default='[]')
+    post_parser.add_argument('group_ids', location='form', type=str, default='[]')
+
+    delete_parser = api.parser()
+    delete_parser.add_argument('action', location='form', type=str, required=True, choices=ObjectPermissions.ACTIONS)
+    delete_parser.add_argument(
+        'agents_set_name', location='form', type=str, required=True, choices=[Permission.GRANTED, Permission.WITHDRAWN])
+    delete_parser.add_argument('user_ids', location='form', type=str, default='[]')
+    delete_parser.add_argument('group_ids', location='form', type=str, default='[]')
+
+    @api.expect(post_parser, validate=True)
+    def post(self, resource_id):
+        colln = get_colln()
+        current_user_id = get_current_user_id(required=True)
+        current_user_group_ids = get_current_user_group_ids()
+        current_org_name = get_current_org()
+        args = self.post_parser.parse_args()
+
+        user_ids = jsonify_argument(args.get('user_ids', None), key='user_ids') or []
+        check_argument_type(user_ids, (list, ), key='user_ids')
+
+        group_ids = jsonify_argument(args.get('group_ids', None), key='group_ids') or []
+        check_argument_type(group_ids, (list, ), key='group_ids')
+
+        def get_user_fn(user_id, projection=None):
+            return get_user(current_org_name, user_id, projection=projection)
+
+        def get_group_fn(group_id, projection=None):
+            return get_group(current_org_name, group_id, projection=projection)
+
+        try:
+            objstore_helper.add_to_permissions_agent_set(
+                colln, resource_id, current_user_id, current_user_group_ids,
+                args['action'], args['agents_set_name'], get_user_fn, get_group_fn,
+                user_ids=user_ids, group_ids=group_ids)
+        except objstore_helper.ObjModelException as e:
+            return error_response(message=e.message, code=e.http_response_code)
+
+        resource_json = colln.get(resource_id, projection={"permissions": 1})
+        resource_permissions = resource_json['permissions']
+        return resource_permissions
+
+    @api.expect(delete_parser, validate=True)
+    def delete(self, resource_id):
+        colln = get_colln()
+        current_user_id = get_current_user_id(required=True)
+        current_user_group_ids = get_current_user_group_ids()
+        args = self.post_parser.parse_args()
+
+        user_ids = jsonify_argument(args.get('user_ids', None), key='user_ids') or []
+        check_argument_type(user_ids, (list, ), key='user_ids')
+
+        group_ids = jsonify_argument(args.get('group_ids', None), key='group_ids') or []
+        check_argument_type(group_ids, (list, ), key='group_ids')
+
+        try:
+            objstore_helper.remove_from_permissions_agent_set(
+                colln, resource_id, current_user_id, current_user_group_ids,
+                args['action'], args['agents_set_name'],
+                user_ids=user_ids, group_ids=group_ids)
+        except objstore_helper.ObjModelException as e:
+            return error_response(message=e.message, code=e.http_response_code)
+
+        resource_json = colln.get(resource_id, projection={"permissions": 1})
+        resource_permissions = resource_json['permissions']
+        return resource_permissions
+
+
 @api.route('/resources/<string:resource_id>/files')
 class Files(flask_restplus.Resource):
 
     get_parser = api.parser()
-    get_parser.add_argument('filter_doc', location='args', type=str)
+    get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
@@ -390,7 +469,7 @@ class File(flask_restplus.Resource):
 
     def get(self, file_id):
         colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
+        current_user_id = get_current_user_id(required=False)
         current_user_group_ids = get_current_user_group_ids()
 
         file_anno = objstore_helper.get_resource(colln, _id=file_id)
@@ -514,7 +593,7 @@ class Tree(flask_restplus.Resource):
     def get(self, root_node_id):
         args = self.get_parser.parse_args()
         colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
+        current_user_id = get_current_user_id(required=False)
         current_user_group_ids = get_current_user_group_ids()
 
         max_depth = args['max_depth']

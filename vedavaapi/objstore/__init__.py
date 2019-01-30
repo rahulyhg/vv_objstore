@@ -56,7 +56,7 @@ class ObjstoreOrgHandler(OrgHandler):
         )
 
     def initialize(self):
-        self.initial_resources = bootstrap_initial_resources(self.objstore_colln)
+        self.initial_resources = bootstrap_initial_resources(self.objstore_colln, self.org_name, self.org_config)
 
 
 class VedavaapiObjstore(VedavaapiService):
