@@ -20,9 +20,7 @@ class ObjstoreOrgHandler(OrgHandler):
         super(ObjstoreOrgHandler, self).__init__(service, org_name)
 
         self.objstore_db_config = self.dbs_config['objstore_db']
-
         self.objstore_db = self.store.db(self.objstore_db_config['name'])
-
         self.objstore_colln = self.objstore_db.get_collection(
             self.objstore_db_config['collections']['objstore']
         )
@@ -31,6 +29,7 @@ class ObjstoreOrgHandler(OrgHandler):
             file_store_type='data',
             base_path=''
         )
+        self.initial_agents = None
 
     def prezi_interface(self):
         if not hasattr(self, 'iiif_prezi_interface'):
@@ -75,6 +74,15 @@ class VedavaapiObjstore(VedavaapiService):
 
     def colln(self, org_name):
         return self.get_org(org_name).objstore_colln  # type: MyDbCollection
+
+    def get_accounts_api_config(self, org_name):
+        return self.get_org(org_name).accounts_api_config
+
+    def get_initial_agents(self, org_name):
+        return self.get_org(org_name).initial_agents
+
+    def set_initial_agents(self, org_name, initial_agents):
+        self.get_org(org_name).initial_agents = initial_agents
 
     def root_dir_path(self, org_name):
         return self.get_org(org_name).root_dir_path

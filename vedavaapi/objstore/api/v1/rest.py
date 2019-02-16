@@ -3,9 +3,8 @@ import os
 from collections import OrderedDict
 
 import flask_restplus
-from flask import request
+from flask import request, g
 from jsonschema import ValidationError
-from werkzeug.datastructures import FileStorage
 
 from sanskrit_ld.helpers.permissions_helper import PermissionResolver
 from sanskrit_ld.schema import JsonObject
@@ -13,11 +12,13 @@ from sanskrit_ld.schema.base import ObjectPermissions, Permission
 
 from vedavaapi.common.api_common import jsonify_argument, error_response, check_argument_type, \
     abort_with_error_response, get_current_org, get_user, get_group
-from vedavaapi.common.api_common import get_current_user_id, get_current_user_group_ids, get_initial_agents
+
+from vedavaapi.common.token_helper import require_oauth, current_token
 from vedavaapi.objectdb import objstore_helper as objstore_helper
+from werkzeug.datastructures import FileStorage
 
 from . import api
-from .. import get_colln, resource_file_path
+from .. import resource_file_path
 from ..files_helper import save_file, delete_resource_file, delete_resource_dir
 
 
@@ -30,10 +31,6 @@ def _validate_projection(projection):
 
 
 def get_requested_resources(args):
-    colln = get_colln()
-    current_user_id = get_current_user_id(required=False)
-    current_user_group_ids = get_current_user_group_ids()
-
     selector_doc = jsonify_argument(args.get('selector_doc', None), key='selector_doc') or {}
     check_argument_type(selector_doc, (dict,), key='selector_doc')
 
@@ -57,7 +54,9 @@ def get_requested_resources(args):
 
     try:
         resource_repr_jsons = objstore_helper.get_read_permitted_resource_jsons(
-            colln, current_user_id, current_user_group_ids, selector_doc, projection=projection, ops=ops)
+            g.objstore_colln, current_token.user_id,
+            current_token.group_ids, selector_doc, projection=projection, ops=ops
+        )
     except (TypeError, ValueError):
         error = error_response(message='arguments to operations seems invalid', code=400)
         abort_with_error_response(error)
@@ -68,7 +67,7 @@ def get_requested_resources(args):
     if lrs_request_doc is not None:
         # noinspection PyUnboundLocalVariable
         for rj in resource_repr_jsons:
-            linked_resources = objstore_helper.get_linked_resource_ids(colln, rj['_id'], lrs_request_doc)
+            linked_resources = objstore_helper.get_linked_resource_ids(g.objstore_colln, rj['_id'], lrs_request_doc)
             rj['linked_resources'] = linked_resources
     return resource_repr_jsons
 
@@ -97,16 +96,15 @@ class Resources(flask_restplus.Resource):
     delete_parser.add_argument('resource_ids', location='form', type=str, required=True)
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self):
         args = self.get_parser.parse_args()
         return get_requested_resources(args)
 
     @api.expect(post_parser, validate=True)
+    @require_oauth()
     def post(self):
         args = self.post_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
 
         resource_jsons = jsonify_argument(args['resources_list'], key='resources_list')
         check_argument_type(resource_jsons, (list, ), key='resources_list')
@@ -127,7 +125,6 @@ class Resources(flask_restplus.Resource):
 
         return_created_lrs = args.get('return_created_linked_resources', True)
 
-        initial_agents = get_initial_agents()
         created_resource_jsons = []
         for n, rj in enumerate(resource_jsons):
             try:
@@ -136,11 +133,13 @@ class Resources(flask_restplus.Resource):
 
                 resource = JsonObject.make_from_dict(rj)
                 created_resource_id = objstore_helper.create_or_update(
-                    colln, resource, current_user_id, current_user_group_ids, initial_agents=initial_agents)
+                    g.objstore_colln, resource,
+                    current_token.user_id, current_token.group_ids, initial_agents=g.initial_agents)
+
                 if created_resource_id is None:
                     created_resource_jsons.append(None)
                     continue
-                created_resource_json = colln.get(
+                created_resource_json = g.objstore_colln.get(
                     created_resource_id,
                     projection=objstore_helper.modified_projection(return_projection, ["_id", "jsonClass"]))
                 created_resource_jsons.append(created_resource_json)
@@ -163,8 +162,8 @@ class Resources(flask_restplus.Resource):
                     if attachment_file_name not in files_index:
                         continue
                     file_anno = save_file(
-                        colln, current_user_id, current_user_group_ids, created_resource_id,
-                        files_index[attachment_file_name], attachment_purpose, initial_agents=initial_agents
+                        g.objstore_colln, current_token.user_id, current_token.group_ids, created_resource_id,
+                        files_index[attachment_file_name], attachment_purpose, initial_agents=g.initial_agents
                     )
                     # noinspection PyProtectedMember
                     created_linked_resource_ids['files'].append(file_anno._id)
@@ -184,11 +183,9 @@ class Resources(flask_restplus.Resource):
         return created_resource_jsons
 
     @api.expect(delete_parser, validate=True)
+    @require_oauth()
     def delete(self):
         args = self.delete_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
 
         resource_ids = jsonify_argument(args['resource_ids'])
         check_argument_type(resource_ids, (list,))
@@ -201,7 +198,7 @@ class Resources(flask_restplus.Resource):
 
         for resource_id in resource_ids:
             deleted, deleted_res_ids = objstore_helper.delete_tree(
-                colln, resource_id, current_user_id, current_user_group_ids)
+                g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids)
             for deleted_res_id in deleted_res_ids:
                 delete_resource_dir(deleted_res_id)
             delete_report.append({
@@ -221,11 +218,9 @@ class ResourceObject(flask_restplus.Resource):
     get_parser.add_argument('projection', location='args', type=str)
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self, resource_id):
         args = self.get_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=False)
-        current_user_group_ids = get_current_user_group_ids()
 
         lrs_request_doc = jsonify_argument(args['linked_resources'], 'linked_resources')
         check_argument_type(lrs_request_doc, (dict,), key='associated_resources', allow_none=True)
@@ -235,11 +230,11 @@ class ResourceObject(flask_restplus.Resource):
         _validate_projection(projection)
 
         resource = objstore_helper.get_resource(
-            colln, resource_id, projection=objstore_helper.modified_projection(
+            g.objstore_colln, resource_id, projection=objstore_helper.modified_projection(
                 projection, mandatory_attrs=["jsonClass", "_id", "permissions", "target", "source"])
         )
         if not PermissionResolver.resolve_permission(
-                resource, ObjectPermissions.READ, current_user_id, current_user_group_ids, colln):
+                resource, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
         objstore_helper.delete_attr_if_not_requested(resource, ['permissions', 'target', 'source'], projection)
@@ -247,7 +242,7 @@ class ResourceObject(flask_restplus.Resource):
 
         if lrs_request_doc is not None:
             resource_json['linked_resources'] = objstore_helper.get_linked_resource_ids(
-                colln, resource_id, lrs_request_doc)
+                g.objstore_colln, resource_id, lrs_request_doc)
         return resource_json
 
 
@@ -266,6 +261,7 @@ class SpecificResources(flask_restplus.Resource):
     delete_parser.add_argument('filter_doc', location='form', type=str)
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self, resource_id):
         args = self.get_parser.parse_args()
 
@@ -277,18 +273,16 @@ class SpecificResources(flask_restplus.Resource):
         return get_requested_resources(args)
 
     @api.expect(delete_parser, validate=True)
+    @require_oauth()
     def delete(self, resource_id):
         args = self.get_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
 
         filter_doc = jsonify_argument(args['filter_doc'], key='filter_doc') or {}
         check_argument_type(filter_doc, (dict,), key='filter_doc')
         selector_doc = objstore_helper.specific_resources_selector_doc(resource_id, custom_filter_doc=filter_doc)
 
         deleted_all, deleted_res_ids = objstore_helper.delete_selection(
-            colln, selector_doc, current_user_id, current_user_group_ids)
+            g.objstore_colln, selector_doc, current_token.user_id, current_token.group_ids)
         return {
             "deleted_all": deleted_all,
             "deleted_res_ids": deleted_res_ids
@@ -310,6 +304,7 @@ class Annotations(flask_restplus.Resource):
     delete_parser.add_argument('filter_doc', location='form', type=str)
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self, resource_id):
         args = self.get_parser.parse_args()
 
@@ -321,18 +316,16 @@ class Annotations(flask_restplus.Resource):
         return get_requested_resources(args)
 
     @api.expect(delete_parser, validate=True)
+    @require_oauth()
     def delete(self, resource_id):
         args = self.get_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
 
         filter_doc = jsonify_argument(args['filter_doc'], key='filter_doc') or {}
         check_argument_type(filter_doc, (dict,), key='filter_doc')
         selector_doc = objstore_helper.annotations_selector_doc(resource_id, custom_filter_doc=filter_doc)
 
         deleted_all, deleted_res_ids = objstore_helper.delete_selection(
-            colln, selector_doc, current_user_id, current_user_group_ids)
+            g.objstore_colln, selector_doc, current_token.user_id, current_token.group_ids)
         return {
             "deleted_all": deleted_all,
             "deleted_res_ids": deleted_res_ids
@@ -357,10 +350,8 @@ class PermittedAgents(flask_restplus.Resource):
     delete_parser.add_argument('group_ids', location='form', type=str, default='[]')
 
     @api.expect(post_parser, validate=True)
+    @require_oauth()
     def post(self, resource_id):
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
         current_org_name = get_current_org()
         args = self.post_parser.parse_args()
 
@@ -378,21 +369,19 @@ class PermittedAgents(flask_restplus.Resource):
 
         try:
             objstore_helper.add_to_permissions_agent_set(
-                colln, resource_id, current_user_id, current_user_group_ids,
+                g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids,
                 args['action'], args['agents_set_name'], get_user_fn, get_group_fn,
                 user_ids=user_ids, group_ids=group_ids)
         except objstore_helper.ObjModelException as e:
             return error_response(message=e.message, code=e.http_response_code)
 
-        resource_json = colln.get(resource_id, projection={"permissions": 1})
+        resource_json = g.objstore_colln.get(resource_id, projection={"permissions": 1})
         resource_permissions = resource_json['permissions']
         return resource_permissions
 
     @api.expect(delete_parser, validate=True)
+    @require_oauth()
     def delete(self, resource_id):
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
         args = self.post_parser.parse_args()
 
         user_ids = jsonify_argument(args.get('user_ids', None), key='user_ids') or []
@@ -403,13 +392,13 @@ class PermittedAgents(flask_restplus.Resource):
 
         try:
             objstore_helper.remove_from_permissions_agent_set(
-                colln, resource_id, current_user_id, current_user_group_ids,
+                g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids,
                 args['action'], args['agents_set_name'],
                 user_ids=user_ids, group_ids=group_ids)
         except objstore_helper.ObjModelException as e:
             return error_response(message=e.message, code=e.http_response_code)
 
-        resource_json = colln.get(resource_id, projection={"permissions": 1})
+        resource_json = g.objstore_colln.get(resource_id, projection={"permissions": 1})
         resource_permissions = resource_json['permissions']
         return resource_permissions
 
@@ -429,6 +418,7 @@ class Files(flask_restplus.Resource):
     post_parser.add_argument('files_purpose', type=str, location='form')
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self, resource_id):
         args = self.get_parser.parse_args()
 
@@ -440,21 +430,17 @@ class Files(flask_restplus.Resource):
         return get_requested_resources(args)
 
     @api.expect(post_parser, validate=True)
+    @require_oauth()
     def post(self, resource_id):
         args = self.post_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
-
-        initial_agents = get_initial_agents()
 
         files = request.files.getlist("files")
         purpose = args['files_purpose']
         file_annotation_jsons = []
         for f in files:
             file_annotation_json = save_file(
-                colln, current_user_id, current_user_group_ids,
-                resource_id, f, purpose, initial_agents=initial_agents).to_json_map()
+                g.objstore_colln, current_token.user_id, current_token.group_ids,
+                resource_id, f, purpose, initial_agents=g.initial_agents).to_json_map()
             file_annotation_json.pop('body', None)
             file_annotation_jsons.append(file_annotation_json)
         return file_annotation_jsons
@@ -467,17 +453,14 @@ class File(flask_restplus.Resource):
     post_parser = api.parser()
     post_parser.add_argument('file', type=FileStorage, location='files')
 
+    @require_oauth(token_required=False)
     def get(self, file_id):
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=False)
-        current_user_group_ids = get_current_user_group_ids()
-
-        file_anno = objstore_helper.get_resource(colln, _id=file_id)
+        file_anno = objstore_helper.get_resource(g.objstore_colln, _id=file_id)
         if file_anno is None:
             return error_response(message="file not found", code=404)
 
         if not PermissionResolver.resolve_permission(
-                file_anno, ObjectPermissions.READ, current_user_id, current_user_group_ids, colln):
+                file_anno, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
         target_resource_id = file_anno.target
@@ -491,21 +474,19 @@ class File(flask_restplus.Resource):
         )
 
     @api.expect(post_parser, validate=True)
+    @require_oauth()
     def post(self, file_id):
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
-
         files = request.files.getlist("file")
 
-        file_anno = objstore_helper.get_resource(colln, _id=file_id)
+        file_anno = objstore_helper.get_resource(g.objstore_colln, _id=file_id)
         if file_anno is None:
             return error_response(message="file not found", code=404)
 
         target_resource_id = file_anno.target
 
         if not PermissionResolver.resolve_permission(
-                file_anno, ObjectPermissions.UPDATE_CONTENT, current_user_id, current_user_group_ids, colln):
+                file_anno, ObjectPermissions.UPDATE_CONTENT,
+                current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
         for f in files:
@@ -514,13 +495,10 @@ class File(flask_restplus.Resource):
             f.save(full_path)
             return {"success": True}
 
+    @require_oauth()
     def delete(self, file_id):
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
-
         try:
-            delete_resource_file(colln, current_user_id, current_user_group_ids, file_id)
+            delete_resource_file(g.objstore_colln, current_token.user_id, current_token.group_ids, file_id)
         except Exception as e:
             return error_response(message=str(e), code=403)
         return {"success": True}
@@ -536,11 +514,9 @@ class Trees(flask_restplus.Resource):
     post_parser.add_argument('annotations_return_projection', location='form', type=str)
 
     @api.expect(post_parser, validate=True)
+    @require_oauth()
     def post(self):
         args = self.post_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=True)
-        current_user_group_ids = get_current_user_group_ids()
 
         root_node_return_projection = objstore_helper.modified_projection(
             jsonify_argument(args['root_node_return_projection']), mandatory_attrs=['_id'])
@@ -555,16 +531,15 @@ class Trees(flask_restplus.Resource):
         trees = jsonify_argument(args['trees'], key='trees')
         check_argument_type(trees, (list,), key='trees')
 
-        initial_agents = get_initial_agents()
         result_trees = []
         try:
             for i, tree in enumerate(trees):
                 result_tree = objstore_helper.update_tree(
-                    colln, current_user_id, current_user_group_ids, tree, 'tree{}'.format(i), None,
+                    g.objstore_colln, current_token.user_id, current_token.group_ids, tree, 'tree{}'.format(i), None,
                     root_node_return_projection=root_node_return_projection,
                     specific_resources_return_projection=specific_resources_return_projection,
                     annotations_return_projection=annotations_return_projection,
-                    initial_agents=initial_agents)
+                    initial_agents=g.initial_agents)
                 result_trees.append(result_tree)
         except objstore_helper.TreeValidationError as e:
             return error_response(
@@ -590,11 +565,9 @@ class Tree(flask_restplus.Resource):
     get_parser.add_argument('annotations_projection', location='args', type=str)
 
     @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
     def get(self, root_node_id):
         args = self.get_parser.parse_args()
-        colln = get_colln()
-        current_user_id = get_current_user_id(required=False)
-        current_user_group_ids = get_current_user_group_ids()
 
         max_depth = args['max_depth']
         specific_resources_filter = jsonify_argument(args['sections_filter']) or {}
@@ -612,7 +585,7 @@ class Tree(flask_restplus.Resource):
 
         try:
             tree = objstore_helper.read_tree(
-                colln, root_node_id, max_depth, current_user_id, current_user_group_ids,
+                g.objstore_colln, root_node_id, max_depth, current_token.user_id, current_token.group_ids,
                 specific_resources_filter=specific_resources_filter,
                 annotations_filter=annotations_filter,
                 root_node_projection=root_node_projection,
