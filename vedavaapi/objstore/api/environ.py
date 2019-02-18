@@ -42,18 +42,22 @@ def _get_initial_agents():
         'accounts/agents/v1/initial_agents'
     )
 
-    response = requests.get(initial_agents_endpoint)
     try:
-        response.raise_for_status()
-    except HTTPError:
-        return None
-    initial_agents_json = response.json()
+        response = requests.get(initial_agents_endpoint)
+        try:
+            response.raise_for_status()
+        except HTTPError:
+            return None
+        initial_agents_json = response.json()
 
-    InitialAgents = namedtuple('InitialAgents', ['all_users_group_id', 'root_admin_id', 'root_admins_group_id'])
-    initial_agents = InitialAgents(
-        initial_agents_json.get('all_users_group_id', None),
-        initial_agents_json.get('root_admin_id', None), initial_agents_json.get('root_admins_group_id', None))
-    myservice().set_initial_agents(current_org_name, initial_agents)
+        InitialAgents = namedtuple('InitialAgents', ['all_users_group_id', 'root_admin_id', 'root_admins_group_id'])
+        initial_agents = InitialAgents(
+            initial_agents_json.get('all_users_group_id', None),
+            initial_agents_json.get('root_admin_id', None), initial_agents_json.get('root_admins_group_id', None))
+        myservice().set_initial_agents(current_org_name, initial_agents)
+    except Exception:
+        from vedavaapi.common.api_common import get_initial_agents
+        initial_agents = get_initial_agents(current_org_name)
 
     return initial_agents
 
