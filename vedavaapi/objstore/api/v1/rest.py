@@ -544,7 +544,7 @@ class Trees(flask_restplus.Resource):
         except objstore_helper.TreeValidationError as e:
             return error_response(
                 message="error in posting tree",
-                code=400,
+                code=e.http_status_code,
                 invalid_node_path=e.invalid_node_path,
                 invalid_node_json=e.invalid_node_json,
                 error=str(e.error),

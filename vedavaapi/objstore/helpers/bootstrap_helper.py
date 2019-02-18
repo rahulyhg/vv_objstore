@@ -27,10 +27,10 @@ def bootstrap_initial_resources(colln, org_name, org_config):
     org_genesis_resource.permissions = ObjectPermissions.template_object_permissions()
 
     org_genesis_resource.permissions.add_to_granted_list(
-        [ObjectPermissions.READ, ObjectPermissions.LIST, ObjectPermissions.LINK_FROM_OTHERS],
+        [ObjectPermissions.READ, ObjectPermissions.LIST],
         group_pids=[initial_agents.all_users_group_id])
     org_genesis_resource.permissions.add_to_granted_list(
-        [ObjectPermissions.UPDATE_CONTENT], user_pids=[initial_agents.root_admin_id], group_pids=[initial_agents.root_admins_group_id])
+        [ObjectPermissions.UPDATE_CONTENT, ObjectPermissions.LINK_FROM_OTHERS], user_pids=[initial_agents.root_admin_id], group_pids=[initial_agents.root_admins_group_id])
 
     inserted_id = colln.insert_one(org_genesis_resource.to_json_map())
     return InitialResources(inserted_id)
