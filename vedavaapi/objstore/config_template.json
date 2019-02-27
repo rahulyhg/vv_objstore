@@ -1,12 +1,12 @@
 {
-    "dbs": {
-      "objstore_db": {
-          "name": "objstore",
-          "collections": {
-              "objstore": "objstore"
-          }
-      }
-    },
+  "dbs": {
+    "objstore_db": {
+        "name": "objstore",
+        "collections": {
+            "objstore": "objstore"
+        }
+    }
+  },
   "accounts_api": {
   }
 }

@@ -233,6 +233,8 @@ class ResourceObject(flask_restplus.Resource):
             g.objstore_colln, resource_id, projection=objstore_helper.modified_projection(
                 projection, mandatory_attrs=["jsonClass", "_id", "permissions", "target", "source"])
         )
+        if not resource:
+            return error_response(message='resource not found', code=404)
         if not PermissionResolver.resolve_permission(
                 resource, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
@@ -622,6 +624,19 @@ class Schema(flask_restplus.Resource):
         if class_obj is None:
             return error_response(message='{} is not defined'.format(json_class))
         return class_obj.schema
+
+
+
+# noinspection PyMethodMayBeStatic
+@api.route('/presentation_schemas/<json_class>')
+class PresentationSchema(flask_restplus.Resource):
+
+    def get(self, json_class):
+        from sanskrit_ld.schema import json_class_registry
+        class_obj = json_class_registry.get(json_class, None)
+        if class_obj is None:
+            return error_response(message='{} is not defined'.format(json_class))
+        return class_obj.presentation_schema
 
 
 # noinspection PyMethodMayBeStatic
