@@ -54,7 +54,7 @@ class ObjstorePreziInterface(ServicePreziInterface):
             "metadata": obj.get("metadata", []),
         }
         obj_meta.update({
-            "label": obj.get('title', {}).get('chars', object_id),
+            "label": obj.get('title', {})[0].get('chars', object_id),
         })
         self._index_metadata(obj_meta)
         return {

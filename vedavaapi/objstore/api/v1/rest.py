@@ -636,7 +636,7 @@ class PresentationSchema(flask_restplus.Resource):
         class_obj = json_class_registry.get(json_class, None)
         if class_obj is None:
             return error_response(message='{} is not defined'.format(json_class))
-        return class_obj.presentation_schema
+        return class_obj.schema
 
 
 # noinspection PyMethodMayBeStatic
