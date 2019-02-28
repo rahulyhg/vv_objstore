@@ -48,13 +48,15 @@ class ObjstorePreziInterface(ServicePreziInterface):
     def object_details(self, object_id):
         # meta, default_sequence_id, sequence_ids
         obj = self.colln.get(object_id, projection={"permissions": 0})
+        obj_title = obj.get('title', {})
+        obj_title = obj_title if not isinstance(obj_title, list) else obj_title[0]
         if obj is None:
             return None
         obj_meta = {
             "metadata": obj.get("metadata", []),
         }
         obj_meta.update({
-            "label": obj.get('title', {})[0].get('chars', object_id),
+            "label": obj_title.get('chars', object_id),
         })
         self._index_metadata(obj_meta)
         return {
