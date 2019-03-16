@@ -615,7 +615,7 @@ class Tree(flask_restplus.Resource):
     get_parser.add_argument('root_node_projection', location='args', type=str)
     get_parser.add_argument('sections_projection', location='args', type=str)
     get_parser.add_argument('annotations_projection', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
