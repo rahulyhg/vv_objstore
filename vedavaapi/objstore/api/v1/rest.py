@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from collections import OrderedDict
 
 import flask_restplus
@@ -7,14 +8,13 @@ from flask import request, g
 from jsonschema import ValidationError
 
 from sanskrit_ld.helpers.permissions_helper import PermissionResolver
-from sanskrit_ld.schema import JsonObject
 from sanskrit_ld.schema.base import ObjectPermissions, Permission
 
 from vedavaapi.common.api_common import jsonify_argument, error_response, check_argument_type, \
     abort_with_error_response, get_current_org, get_user, get_group
 
 from vedavaapi.common.token_helper import require_oauth, current_token
-from vedavaapi.objectdb import objstore_helper as objstore_helper, objstore_graph_helper
+from vedavaapi.objectdb.helpers import objstore_helper, objstore_graph_helper, projection_helper, ObjModelException
 from werkzeug.datastructures import FileStorage
 
 from . import api
@@ -24,20 +24,20 @@ from ..files_helper import save_file, delete_resource_file, delete_resource_dir
 
 def _validate_projection(projection):
     try:
-        objstore_helper.validate_projection(projection)
-    except objstore_helper.ObjModelException as e:
+        projection_helper.validate_projection(projection)
+    except ObjModelException as e:
         error = error_response(message=e.message, code=e.http_response_code)
         abort_with_error_response(error)
 
 
-def get_requested_resources(args):
+def get_requested_resource_jsons(args):
+
     selector_doc = jsonify_argument(args.get('selector_doc', None), key='selector_doc') or {}
     check_argument_type(selector_doc, (dict,), key='selector_doc')
 
     projection = jsonify_argument(args.get('projection', None), key='projection')
     check_argument_type(projection, (dict,), key='projection', allow_none=True)
     _validate_projection(projection)
-    projection = objstore_helper.modified_projection(projection, mandatory_attrs=["_id", "jsonClass"])
 
     lrs_request_doc = jsonify_argument(args.get('linked_resources', None), 'linked_resources')
     check_argument_type(lrs_request_doc, (dict,), key='linked_resources', allow_none=True)
@@ -48,7 +48,7 @@ def get_requested_resources(args):
     ops = OrderedDict()
     if sort_doc is not None:
         ops['sort'] = [sort_doc]
-    if args.get('start', None) is not None and args.get('count', None) is not None:
+    if args.get('start', None) is not None and args.get('count', 100) is not None:
         ops['skip'] = [args['start']]
         ops['limit'] = [args['count']]
 
@@ -78,13 +78,19 @@ class Resources(flask_restplus.Resource):
     white_listed_classes = ('JsonObject', 'WrapperObject', 'FileAnnotation', 'User', 'UsersGroup')
 
     get_parser = api.parser()
-    get_parser.add_argument('selector_doc', location='args', type=str, default='{}', help='syntax is same as mongo query_doc. regardless of db used on backend. https://docs.mongodb.com/manual/tutorial/query-documents/')
-    get_parser.add_argument('projection', location='args', type=str, help='field:truth key-value pairs. ex: {"permissions": 0}')
+    get_parser.add_argument(
+        'selector_doc', location='args', type=str, default='{}',
+        help='syntax is same as mongo query_doc. https://docs.mongodb.com/manual/tutorial/query-documents/'
+    )
+    get_parser.add_argument('projection', location='args', type=str, help='ex: {"permissions": 0}')
     get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str, help='ex: [["created": 1], ["title.chars": -1]]')
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     post_parser = api.parser()
     post_parser.add_argument('resources_list', location='form', type=str, required=True)
@@ -92,17 +98,23 @@ class Resources(flask_restplus.Resource):
     post_parser.add_argument('attachments_infos', type=str, location='form')
     post_parser.add_argument('return_projection', location='form', type=str)
     post_parser.add_argument('return_created_linked_resources', location='form', type=bool, default=True)
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     delete_parser = api.parser()
     delete_parser.add_argument('resource_ids', location='form', type=str, required=True)
-    delete_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    delete_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
     def get(self):
         args = self.get_parser.parse_args()
-        return get_requested_resources(args)
+        return get_requested_resource_jsons(args)
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -132,11 +144,10 @@ class Resources(flask_restplus.Resource):
         for n, rj in enumerate(resource_jsons):
             try:
                 if 'jsonClass' not in rj:
-                    raise objstore_helper.ObjModelException('jsonClass attribute should exist for update/creation', 403)
+                    raise ObjModelException('jsonClass attribute should exist for update/creation', 403)
 
-                resource = JsonObject.make_from_dict(rj)
                 created_resource_id = objstore_helper.create_or_update(
-                    g.objstore_colln, resource,
+                    g.objstore_colln, rj,
                     current_token.user_id, current_token.group_ids, initial_agents=g.initial_agents)
 
                 if created_resource_id is None:
@@ -144,7 +155,7 @@ class Resources(flask_restplus.Resource):
                     continue
                 created_resource_json = g.objstore_colln.get(
                     created_resource_id,
-                    projection=objstore_helper.modified_projection(return_projection, ["_id", "jsonClass"]))
+                    projection=projection_helper.modified_projection(return_projection, ["_id", "jsonClass"]))
                 created_resource_jsons.append(created_resource_json)
 
                 if not attachments_infos:
@@ -174,11 +185,11 @@ class Resources(flask_restplus.Resource):
                 if return_created_lrs:
                     created_resource_json['created_linked_resources'] = created_linked_resource_ids
 
-            except objstore_helper.ObjModelException as e:
+            except ObjModelException as e:
                 return error_response(
                     message='action not allowed at resource {}'.format(n),
                     code=e.http_response_code, details={"error": e.message})
-            except ValidationError as e:
+            except (ValidationError, TypeError) as e:
                 return error_response(
                     message='schema validation error at resource {}'.format(n),
                     code=400, details={"error": str(e)})
@@ -219,7 +230,10 @@ class ResourceObject(flask_restplus.Resource):
     get_parser = api.parser()
     get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('projection', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
@@ -233,18 +247,17 @@ class ResourceObject(flask_restplus.Resource):
         check_argument_type(projection, (dict,), key='projection', allow_none=True)
         _validate_projection(projection)
 
-        resource = objstore_helper.get_resource(
-            g.objstore_colln, resource_id, projection=objstore_helper.modified_projection(
-                projection, mandatory_attrs=["jsonClass", "_id", "permissions", "target", "source"])
+        resource_json = g.objstore_colln.find_one(
+            objstore_helper.resource_selector_doc(resource_id), projection=None
         )
-        if not resource:
+        if not resource_json:
             return error_response(message='resource not found', code=404)
         if not PermissionResolver.resolve_permission(
-                resource, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
+                resource_json, ObjectPermissions.READ,
+                current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
-        objstore_helper.delete_attr_if_not_requested(resource, ['permissions', 'target', 'source'], projection)
-        resource_json = resource.to_json_map()
+        projection_helper.project_doc(resource_json, projection, in_place=True)
 
         if lrs_request_doc is not None:
             resource_json['linked_resources'] = objstore_helper.get_linked_resource_ids(
@@ -262,11 +275,17 @@ class SpecificResources(flask_restplus.Resource):
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     delete_parser = api.parser()
     delete_parser.add_argument('filter_doc', location='form', type=str)
-    delete_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    delete_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
@@ -278,7 +297,7 @@ class SpecificResources(flask_restplus.Resource):
         selector_doc = objstore_helper.specific_resources_selector_doc(resource_id, custom_filter_doc=filter_doc)
         args['selector_doc'] = json.dumps(selector_doc)
 
-        return get_requested_resources(args)
+        return get_requested_resource_jsons(args)
 
     @api.expect(delete_parser, validate=True)
     @require_oauth()
@@ -307,11 +326,17 @@ class Annotations(flask_restplus.Resource):
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     delete_parser = api.parser()
     delete_parser.add_argument('filter_doc', location='form', type=str)
-    delete_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    delete_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
@@ -323,7 +348,7 @@ class Annotations(flask_restplus.Resource):
         selector_doc = objstore_helper.annotations_selector_doc(resource_id, custom_filter_doc=filter_doc)
         args['selector_doc'] = json.dumps(selector_doc)
 
-        return get_requested_resources(args)
+        return get_requested_resource_jsons(args)
 
     @api.expect(delete_parser, validate=True)
     @require_oauth()
@@ -346,20 +371,36 @@ class Annotations(flask_restplus.Resource):
 class Agents(flask_restplus.Resource):
 
     post_parser = api.parser()
-    post_parser.add_argument('actions', location='form', type=str, required=True, help='any combination among {}'.format(str(ObjectPermissions.ACTIONS)))
     post_parser.add_argument(
-        'agents_set', location='form', type=str, required=True, choices=[Permission.GRANTED, Permission.WITHDRAWN])
+        'actions', location='form', type=str, required=True,
+        help='any combination among {}'.format(str(ObjectPermissions.ACTIONS))
+    )
+    post_parser.add_argument(
+        'agents_set_name', location='form', type=str, required=True,
+        choices=[Permission.GRANTED, Permission.WITHDRAWN, Permission.BLOCKED]
+    )
     post_parser.add_argument('user_ids', location='form', type=str, default='[]')
     post_parser.add_argument('group_ids', location='form', type=str, default='[]')
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     delete_parser = api.parser()
-    delete_parser.add_argument('actions', location='form', type=str, required=True, help='any combination among {}'.format(str(ObjectPermissions.ACTIONS)))
     delete_parser.add_argument(
-        'agents_set', location='form', type=str, required=True, choices=[Permission.GRANTED, Permission.WITHDRAWN])
+        'actions', location='form', type=str, required=True,
+        help='any combination among {}'.format(str(ObjectPermissions.ACTIONS))
+    )
+    delete_parser.add_argument(
+        'agents_set_name', location='form', type=str, required=True,
+        choices=[Permission.GRANTED, Permission.WITHDRAWN]
+    )
     delete_parser.add_argument('user_ids', location='form', type=str, default='[]')
     delete_parser.add_argument('group_ids', location='form', type=str, default='[]')
-    delete_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    delete_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -385,12 +426,13 @@ class Agents(flask_restplus.Resource):
         try:
             objstore_helper.add_to_permissions_agent_set(
                 g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids,
-                actions, args['agents_set'], get_user_fn, get_group_fn,
+                actions, args['agents_set_name'], get_user_fn, get_group_fn,
                 user_ids=user_ids, group_ids=group_ids)
-        except objstore_helper.ObjModelException as e:
+        except ObjModelException as e:
             return error_response(message=e.message, code=e.http_response_code)
 
-        resource_json = g.objstore_colln.get(resource_id, projection={"permissions": 1})
+        resource_json = g.objstore_colln.find_one(
+            objstore_helper.resource_selector_doc(resource_id), projection={"permissions": 1})
         resource_permissions = resource_json['permissions']
         return resource_permissions
 
@@ -411,12 +453,13 @@ class Agents(flask_restplus.Resource):
         try:
             objstore_helper.remove_from_permissions_agent_set(
                 g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids,
-                actions, args['agents_set'],
+                actions, args['agents_set_name'],
                 user_ids=user_ids, group_ids=group_ids)
-        except objstore_helper.ObjModelException as e:
+        except ObjModelException as e:
             return error_response(message=e.message, code=e.http_response_code)
 
-        resource_json = g.objstore_colln.get(resource_id, projection={"permissions": 1})
+        resource_json = g.objstore_colln.find_one(
+            objstore_helper.resource_selector_doc(resource_id), projection={"permissions": 1})
         resource_permissions = resource_json['permissions']
         return resource_permissions
 
@@ -426,7 +469,10 @@ class ResolvedPermissions(flask_restplus.Resource):
 
     get_parser = api.parser()
     get_parser.add_argument('actions', location='args', type=str, default=None)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth()
@@ -438,14 +484,21 @@ class ResolvedPermissions(flask_restplus.Resource):
         actions = jsonify_argument(args.get('actions', None), key='actions') or list(ObjectPermissions.ACTIONS)
         check_argument_type(actions, (list, ), key='actions')
 
-        resource = objstore_helper.get_resource(
-            g.objstore_colln, resource_id, projection=None
+        resource_json = g.objstore_colln.find_one(
+            objstore_helper.resource_selector_doc(resource_id), projection=None
         )
-        if not resource:
+        if not resource_json:
             return error_response(message='resource not found', code=404)
 
+        referred_objects_graph = PermissionResolver.get_referred_objects_graph(
+            g.objstore_colln, resource_json, {resource_json['_id']: resource_json})
+
         resolved_permissions = dict(
-            (action, PermissionResolver.resolve_permission(resource, action, current_token.user_id, current_token.group_ids, g.objstore_colln, true_if_none=False))
+            (
+                action,
+                PermissionResolver.resolve_permission_on_obj_with_referred_graph(
+                    resource_json, referred_objects_graph, action, current_token.user_id, current_token.group_ids)
+             )
             for action in actions
         )
         return resolved_permissions
@@ -460,12 +513,18 @@ class Files(flask_restplus.Resource):
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     post_parser = api.parser()
     post_parser.add_argument('files', type=FileStorage, location='files', required=True)
     post_parser.add_argument('files_purpose', type=str, location='form')
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
@@ -477,7 +536,7 @@ class Files(flask_restplus.Resource):
         selector_doc = objstore_helper.files_selector_doc(resource_id, custom_filter_doc=filter_doc)
         args['selector_doc'] = json.dumps(selector_doc)
 
-        return get_requested_resources(args)
+        return get_requested_resource_jsons(args)
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -502,7 +561,10 @@ class File(flask_restplus.Resource):
 
     post_parser = api.parser()
     post_parser.add_argument('file', type=FileStorage, location='files')
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @require_oauth(token_required=False)
     def get(self, file_id):
@@ -563,20 +625,23 @@ class Trees(flask_restplus.Resource):
     post_parser.add_argument('root_node_return_projection', location='form', type=str)
     post_parser.add_argument('sections_return_projection', location='form', type=str)
     post_parser.add_argument('annotations_return_projection', location='form', type=str)
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
     def post(self):
         args = self.post_parser.parse_args()
 
-        root_node_return_projection = objstore_helper.modified_projection(
+        root_node_return_projection = projection_helper.modified_projection(
             jsonify_argument(args['root_node_return_projection']), mandatory_attrs=['_id'])
         _validate_projection(root_node_return_projection)
-        specific_resources_return_projection = objstore_helper.modified_projection(
+        specific_resources_return_projection = projection_helper.modified_projection(
             jsonify_argument(args['sections_return_projection']), mandatory_attrs=['_id'])
         _validate_projection(specific_resources_return_projection)
-        annotations_return_projection = objstore_helper.modified_projection(
+        annotations_return_projection = projection_helper.modified_projection(
             jsonify_argument(args['annotations_return_projection']), mandatory_attrs=['_id'])
         _validate_projection(annotations_return_projection)
 
@@ -602,6 +667,9 @@ class Trees(flask_restplus.Resource):
                 error=str(e.error),
                 succeded_trees=result_trees
             )
+        except (ValidationError, TypeError) as e:
+            return error_response(message='schema validation error', error=str(e), code=400)
+
         return result_trees
 
 
@@ -615,7 +683,10 @@ class Tree(flask_restplus.Resource):
     get_parser.add_argument('root_node_projection', location='args', type=str)
     get_parser.add_argument('sections_projection', location='args', type=str)
     get_parser.add_argument('annotations_projection', location='args', type=str)
-    get_parser.add_argument('Authorization', location='headers', type=str, required=False, help='should be in form of "Bearer <access_token>"')
+    get_parser.add_argument(
+        'Authorization', location='headers', type=str, required=False,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(get_parser, validate=True)
     @require_oauth(token_required=False)
@@ -626,13 +697,13 @@ class Tree(flask_restplus.Resource):
         specific_resources_filter = jsonify_argument(args['sections_filter']) or {}
         annotations_filter = jsonify_argument(args['annotations_filter']) or {}
 
-        root_node_projection = objstore_helper.modified_projection(
+        root_node_projection = projection_helper.modified_projection(
             jsonify_argument(args['root_node_projection']), mandatory_attrs=['_id'])
         _validate_projection(root_node_projection)
-        specific_resources_projection = objstore_helper.modified_projection(
+        specific_resources_projection = projection_helper.modified_projection(
             jsonify_argument(args['sections_projection']), mandatory_attrs=['_id'])
         _validate_projection(specific_resources_projection)
-        annotations_projection = objstore_helper.modified_projection(
+        annotations_projection = projection_helper.modified_projection(
             jsonify_argument(args['annotations_projection']), mandatory_attrs=['_id'])
         _validate_projection(annotations_projection)
 
@@ -645,7 +716,7 @@ class Tree(flask_restplus.Resource):
                 specific_resources_projection=specific_resources_projection,
                 annotations_projection=annotations_projection
             )
-        except objstore_helper.ObjModelException as e:
+        except ObjModelException as e:
             return error_response(message=e.message, code=e.http_response_code)
 
         return tree
@@ -665,7 +736,13 @@ class Graph(flask_restplus.Resource):
     post_parser.add_argument(
         'response_projection_map', type=str, location='form', default=None
     )
-    post_parser.add_argument('Authorization', location='headers', type=str, required=True, help='should be in form of "Bearer <access_token>"')
+    post_parser.add_argument(
+        'upsert_if_primary_keys_matched', type=str, location='form', choices=['true', 'false'], default='false'
+    )
+    post_parser.add_argument(
+        'Authorization', location='headers', type=str, required=True,
+        help='should be in form of "Bearer <access_token>"'
+    )
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -675,17 +752,25 @@ class Graph(flask_restplus.Resource):
         graph = jsonify_argument(args.get('graph', None), key='graph') or None
         check_argument_type(graph, (dict, ), key='graph')
 
-        should_return_objects = jsonify_argument(args.get('should_return_objects', 'false'), key='should_return_objects')
+        should_return_objects = jsonify_argument(
+            args.get('should_return_objects', 'false'), key='should_return_objects')
         check_argument_type(should_return_objects, (bool, ), key='should_return_objects')
 
-        response_projection_map = jsonify_argument(args.get('response_projection_map', None), key='response_projection_map') or {}
+        response_projection_map = jsonify_argument(
+            args.get('response_projection_map', None), key='response_projection_map') or {}
         check_argument_type(response_projection_map, (dict,), key='response_projection_map')
+
+        upsert_if_primary_keys_matched = jsonify_argument(
+            args.get('upsert_if_primary_keys_matched', 'false'), key='upsert_if_primary_keys_matched')
+        check_argument_type(upsert_if_primary_keys_matched, (bool, ), key='upsert_if_primary_keys_matched')
 
         for json_class in response_projection_map.keys():
             _validate_projection(response_projection_map[json_class])
 
         try:
-            graph_ids_to_uids_map = objstore_graph_helper.post_graph(g.objstore_colln, current_token.user_id, current_token.group_ids, graph, initial_agents=g.initial_agents)
+            graph_ids_to_uids_map = objstore_graph_helper.post_graph(
+                g.objstore_colln, current_token.user_id, current_token.group_ids, graph,
+                initial_agents=g.initial_agents, upsert_if_primary_keys_matched=upsert_if_primary_keys_matched)
         except objstore_graph_helper.GraphValidationError as e:
             return error_response(
                 message=str(e),
@@ -700,8 +785,9 @@ class Graph(flask_restplus.Resource):
         for graph_id, uid in graph_ids_to_uids_map.items():
             node_json = g.objstore_colln.find_one({"_id": uid})
             projection = response_projection_map.get(node_json['jsonClass'], response_projection_map.get('*', None))
-            modified_projection = objstore_helper.modified_projection(projection, mandatory_attrs=['jsonClass', '_id'])
-            projected_node_json = objstore_helper.project_doc(node_json, modified_projection)
+            modified_projection = projection_helper.modified_projection(
+                projection, mandatory_attrs=['jsonClass', '_id'])
+            projected_node_json = projection_helper.project_doc(node_json, modified_projection)
             graph_ids_to_nodes_map[graph_id] = projected_node_json
 
         return graph_ids_to_nodes_map, 200
@@ -731,7 +817,6 @@ class Schema(flask_restplus.Resource):
         if class_obj is None:
             return error_response(message='{} is not defined'.format(json_class))
         return class_obj.schema
-
 
 
 # noinspection PyMethodMayBeStatic

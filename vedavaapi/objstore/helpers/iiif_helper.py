@@ -2,7 +2,7 @@ from collections import OrderedDict
 
 from sanskrit_ld.schema import JsonObject
 from vedavaapi.objectdb.mydb import MyDbCollection
-from vedavaapi.objectdb import objstore_helper
+from vedavaapi.objectdb.helpers import objstore_helper
 
 from vedavaapi.iiif_image.loris.resolver import ServiceFSHelper
 from vedavaapi.iiif_presentation.prezed.sevices_helper import ServicePreziInterface

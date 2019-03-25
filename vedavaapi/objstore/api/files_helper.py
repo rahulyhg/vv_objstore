@@ -6,7 +6,7 @@ from sanskrit_ld.helpers.permissions_helper import PermissionResolver
 from sanskrit_ld.schema import JsonObject
 from sanskrit_ld.schema.base import FileDescriptor, ObjectPermissions
 from sanskrit_ld.schema.base.annotations import FileAnnotation
-from vedavaapi.objectdb.objstore_helper import create_or_update
+from vedavaapi.objectdb.helpers import objstore_helper
 
 from . import resource_file_path, resource_dir_path
 
@@ -19,8 +19,8 @@ def save_file(colln, user_id, user_group_ids, resource_id, file, purpose, initia
     file_descriptor = FileDescriptor.from_details(path=file_name)
     file_annotation = FileAnnotation.from_details(file=file_descriptor, target=resource_id, purpose=purpose)
 
-    created_doc_id = create_or_update(
-        colln, file_annotation, user_id, user_group_ids, validate_operation=False, initial_agents=initial_agents)
+    created_doc_id = objstore_helper.create_or_update(
+        colln, file_annotation.to_json_map(), user_id, user_group_ids, validate_operation=False, initial_agents=initial_agents)
     created_doc_json = colln.get(created_doc_id)
     created_anno = JsonObject.make_from_dict(created_doc_json)
 
