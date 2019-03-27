@@ -726,6 +726,23 @@ class Tree(flask_restplus.Resource):
 @api.route('/graph')
 class Graph(flask_restplus.Resource):
 
+    get_parser = api.parser()
+    get_parser.add_argument(
+        'start_nodes_selector', type=str, location='args', required=True
+    )
+    get_parser.add_argument(
+        'traverse_key_filter_maps_list', type=str, location='args', default='[{"source": {}, "target": {}}]'
+    )
+    get_parser.add_argument(
+        'direction', type=str, location='args', choices=['referred', 'referrer'], required=True
+    )
+    get_parser.add_argument(
+        'max_hops', type=int, location='args', default=0
+    )
+    get_parser.add_argument(
+        'json_class_projection_map', type=str, location='args', default=None
+    )
+
     post_parser = api.parser()
     post_parser.add_argument(
         'graph', type=str, location='form', required=True
@@ -743,6 +760,36 @@ class Graph(flask_restplus.Resource):
         'Authorization', location='headers', type=str, required=True,
         help='should be in form of "Bearer <access_token>"'
     )
+
+    @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
+    def get(self):
+        args = self.get_parser.parse_args()
+
+        start_nodes_selector = jsonify_argument(args['start_nodes_selector'], key='start_nodes_selector')
+        check_argument_type(start_nodes_selector, (dict, ), key='start_nodes_selector')
+
+        traverse_key_filter_maps_list = jsonify_argument(
+            args['traverse_key_filter_maps_list'], key='traverse_key_filter_maps_list')
+        check_argument_type(traverse_key_filter_maps_list, (list, ), key='traverse_key_filter_maps_list')
+
+        for kf_map in traverse_key_filter_maps_list:
+            if not isinstance(kf_map, dict):
+                return error_response(message='invalid traverse_key_filter_maps_list', code=400)
+
+        json_class_projection_map = jsonify_argument(
+            args.get('json_class_projection_map', None), key='json_class_projection_map') or {}
+        check_argument_type(json_class_projection_map, (dict, ), key='json_class_projection_map')
+
+        direction = args.get('direction')
+        max_hops = args.get('max_hops', 0)
+
+        graph, start_nodes_ids = objstore_graph_helper.get_graph(
+            g.objstore_colln, start_nodes_selector, {}, traverse_key_filter_maps_list, direction, max_hops,
+            current_token.user_id, current_token.group_ids)
+        objstore_graph_helper.project_graph_nodes(graph, json_class_projection_map, in_place=True)
+
+        return {"graph": graph, "start_nodes_ids": start_nodes_ids}, 200
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -781,17 +828,72 @@ class Graph(flask_restplus.Resource):
         if not should_return_objects:
             return graph_ids_to_uids_map, 200
 
-        graph_ids_to_nodes_map = {}
-        for graph_id, uid in graph_ids_to_uids_map.items():
-            node_json = g.objstore_colln.find_one({"_id": uid})
-            projection = response_projection_map.get(node_json['jsonClass'], response_projection_map.get('*', None))
-            modified_projection = projection_helper.modified_projection(
-                projection, mandatory_attrs=['jsonClass', '_id'])
-            projected_node_json = projection_helper.project_doc(node_json, modified_projection)
-            graph_ids_to_nodes_map[graph_id] = projected_node_json
+        graph_ids_to_nodes_map = dict(
+            (graph_id, g.objstore_colln.find_one({"_id": uid}))
+            for (graph_id, uid) in graph_ids_to_uids_map.items()
+        )
+        objstore_graph_helper.project_graph_nodes(graph_ids_to_nodes_map, response_projection_map, in_place=True)
 
         return graph_ids_to_nodes_map, 200
 
+
+@api.route('/network')
+class Network(flask_restplus.Resource):
+
+    get_parser =api.parser()
+    get_parser.add_argument(
+        'start_nodes_selector', type=str, location='args', required=True
+    )
+    get_parser.add_argument(
+        'edge_filters_list', type==str, location='args', required=True
+    )
+    get_parser.add_argument(
+        'from_link_field', type=str, location='args', required=True
+    )
+    get_parser.add_argument(
+        'to_link_field', type=str, location='args', required=True
+    )
+    get_parser.add_argument(
+        'max_hops', type=int, location='args', default=0
+    )
+    get_parser.add_argument(
+        'json_class_projection_map', type=str, location='args', default=None
+    )
+
+    @api.expect(get_parser, validate=True)
+    @require_oauth(token_required=False)
+    def get(self):
+        args = self.get_parser.parse_args()
+
+        start_nodes_selector = jsonify_argument(args['start_nodes_selector'], key='start_nodes_selector')
+        check_argument_type(start_nodes_selector, (dict,), key='start_nodes_selector')
+
+        edge_filters_list = jsonify_argument(
+            args['edge_filters_list'], key='edge_filters_list')
+        check_argument_type(edge_filters_list, (list,), key='edge_filters_list')
+
+        for ef in edge_filters_list:
+            if not isinstance(ef, dict):
+                return error_response(message='invalid edge_filters_list', code=400)
+
+        json_class_projection_map = jsonify_argument(
+            args.get('json_class_projection_map', None), key='json_class_projection_map') or {}
+        check_argument_type(json_class_projection_map, (dict,), key='json_class_projection_map')
+
+        from_link_field = args.get('from_link_field')
+        to_link_field = args.get('to_link_field')
+        max_hops = args.get('max_hops', 0)
+
+        network, start_nodes_ids = objstore_graph_helper.get_network(
+            g.objstore_colln, start_nodes_selector, {"nodes": {}, "edges": {}}, edge_filters_list,
+            from_link_field, to_link_field, max_hops, current_token.user_id, current_token.group_ids)
+        objstore_graph_helper.project_graph_nodes(network['nodes'], json_class_projection_map, in_place=True)
+        objstore_graph_helper.project_graph_nodes(network['edges'], json_class_projection_map, in_place=True)
+
+        return {
+            "network": network,
+            "start_nodes_ids": start_nodes_ids
+        }, 200
 
 # noinspection PyMethodMayBeStatic
 @api.route('/schemas')
