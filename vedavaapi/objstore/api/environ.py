@@ -15,6 +15,11 @@ def _get_objstore_colln():
     return myservice().colln(org_name)
 
 
+def _get_data_dir_path():
+    org_name = get_current_org()
+    return myservice().data_dir_path(org_name)
+
+
 def _get_token_resolver_endpoint():
     current_org_name = get_current_org()
     accounts_api_config = myservice().get_accounts_api_config(current_org_name)
@@ -66,4 +71,5 @@ def push_environ_to_g():
     g.token_resolver_endpoint = _get_token_resolver_endpoint()
     g.current_org_name = get_current_org()
     g.objstore_colln = _get_objstore_colln()
+    g.data_dir_path = _get_data_dir_path()
     g.initial_agents = _get_initial_agents()

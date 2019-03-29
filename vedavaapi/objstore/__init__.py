@@ -41,6 +41,12 @@ class ObjstoreOrgHandler(OrgHandler):
             self.files_helper = ObjstoreFSHelper(self.org_name)
         return self.files_helper
 
+    def data_dir_path(self):
+        return self.store.file_store_path(
+            file_store_type='data',
+            base_path=''
+        )
+
     def resource_dir_path(self, resource_id):
         return self.store.file_store_path(
             file_store_type='data',
@@ -83,6 +89,9 @@ class VedavaapiObjstore(VedavaapiService):
 
     def set_initial_agents(self, org_name, initial_agents):
         self.get_org(org_name).initial_agents = initial_agents
+
+    def data_dir_path(self, org_name):
+        return self.get_org(org_name).data_dir_path()
 
     def root_dir_path(self, org_name):
         return self.get_org(org_name).root_dir_path
