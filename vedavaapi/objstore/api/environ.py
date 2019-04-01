@@ -5,7 +5,7 @@ import requests
 from flask import g
 from requests import HTTPError
 
-from vedavaapi.common.api_common import get_current_org
+from vedavaapi.common.helpers.api_helper import get_current_org
 
 from . import myservice
 
@@ -61,7 +61,7 @@ def _get_initial_agents():
             initial_agents_json.get('root_admin_id', None), initial_agents_json.get('root_admins_group_id', None))
         myservice().set_initial_agents(current_org_name, initial_agents)
     except Exception:
-        from vedavaapi.common.api_common import get_initial_agents
+        from vedavaapi.common.helpers.api_helper import get_initial_agents
         initial_agents = get_initial_agents(current_org_name)
 
     return initial_agents

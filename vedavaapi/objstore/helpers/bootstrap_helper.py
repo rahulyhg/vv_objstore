@@ -2,7 +2,7 @@ from collections import namedtuple
 
 from sanskrit_ld.schema.base import ObjectPermissions, Permission
 from sanskrit_ld.schema.books import Library
-from vedavaapi.common.api_common import get_initial_agents
+from vedavaapi.common.helpers.api_helper import get_initial_agents
 
 from vedavaapi.objectdb.helpers import objstore_helper
 

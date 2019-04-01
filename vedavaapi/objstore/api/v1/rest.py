@@ -10,13 +10,12 @@ from jsonschema import ValidationError
 from sanskrit_ld.helpers.permissions_helper import PermissionResolver
 from sanskrit_ld.schema.base import ObjectPermissions, Permission
 
-from vedavaapi.common.api_common import jsonify_argument, error_response, check_argument_type, \
+from vedavaapi.common.helpers.api_helper import jsonify_argument, error_response, check_argument_type, \
     abort_with_error_response, get_current_org, get_user, get_group
 
-from vedavaapi.common import custom_args_parser
-from vedavaapi.common.custom_args_parser import parse_json_args
+from vedavaapi.common.helpers.args_parse_helper import parse_json_args
 
-from vedavaapi.common.token_helper import require_oauth, current_token
+from vedavaapi.common.helpers.token_helper import require_oauth, current_token
 from vedavaapi.objectdb.helpers import objstore_helper, objstore_graph_helper, projection_helper, ObjModelException
 from werkzeug.datastructures import FileStorage
 
@@ -588,7 +587,7 @@ class Files(flask_restplus.Resource):
 
 # noinspection PyMethodMayBeStatic
 @api.route('/files/<string:file_id>')
-class File(flask_restplus.Resource):
+class LocalNamespaceFile(flask_restplus.Resource):
 
     post_parser = api.parser()
     post_parser.add_argument('file', type=FileStorage, location='files')
@@ -599,45 +598,27 @@ class File(flask_restplus.Resource):
 
     @require_oauth(token_required=False)
     def get(self, file_id):
-        file_anno = objstore_helper.get_resource(g.objstore_colln, _id=file_id)
-        if file_anno is None:
+        ool_data = g.objstore_colln.find_one({"_id": file_id})
+        if ool_data is None:
             return error_response(message="file not found", code=404)
 
         if not PermissionResolver.resolve_permission(
-                file_anno, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
+                ool_data, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
-        target_resource_id = file_anno.target
-        abs_file_path = resource_file_path(target_resource_id, file_anno.body.path)
+        if ool_data['namespace'] != '_local':
+            return error_response(message='this ool data not belongs to _local namespace.', code=404)
 
-        file_dir = os.path.dirname(abs_file_path)
-        file_name = os.path.basename(abs_file_path)
+        local_namespace_data = ool_data.get('namespaceData', {})
+        mimetype = local_namespace_data.get('mimetype', None)
+        print({"mimetype": mimetype}, file=sys.stderr)
+
+        file_dir = g.data_dir_path
+        file_name = os.path.basename(file_id)
         from flask import send_from_directory
         return send_from_directory(
-            directory=file_dir, filename=file_name
+            directory=file_dir, filename=file_name, mimetype=mimetype
         )
-
-    @api.expect(post_parser, validate=True)
-    @require_oauth()
-    def post(self, file_id):
-        files = request.files.getlist("file")
-
-        file_anno = objstore_helper.get_resource(g.objstore_colln, _id=file_id)
-        if file_anno is None:
-            return error_response(message="file not found", code=404)
-
-        target_resource_id = file_anno.target
-
-        if not PermissionResolver.resolve_permission(
-                file_anno, ObjectPermissions.UPDATE_CONTENT,
-                current_token.user_id, current_token.group_ids, g.objstore_colln):
-            return error_response(message='permission denied', code=403)
-
-        for f in files:
-            full_path = resource_file_path(target_resource_id, file_anno.body.path)
-            os.remove(full_path)
-            f.save(full_path)
-            return {"success": True}
 
     @require_oauth()
     def delete(self, file_id):
@@ -900,12 +881,12 @@ class Graph(flask_restplus.Resource):
 @api.route('/network')
 class Network(flask_restplus.Resource):
 
-    get_parser =api.parser()
+    get_parser = api.parser()
     get_parser.add_argument(
         'start_nodes_selector', type=str, location='args', required=True
     )
     get_parser.add_argument(
-        'edge_filters_list', type==str, location='args', required=True
+        'edge_filters_list', type=str, location='args', required=True
     )
     get_parser.add_argument(
         'from_link_field', type=str, location='args', required=True
@@ -955,6 +936,7 @@ class Network(flask_restplus.Resource):
             "network": network,
             "start_nodes_ids": start_nodes_ids
         }, 200
+
 
 # noinspection PyMethodMayBeStatic
 @api.route('/schemas')
