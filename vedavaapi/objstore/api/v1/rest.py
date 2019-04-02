@@ -20,7 +20,6 @@ from vedavaapi.objectdb.helpers import objstore_helper, objstore_graph_helper, p
 from werkzeug.datastructures import FileStorage
 
 from . import api
-from .. import resource_file_path
 from ..files_helper import save_file, delete_resource_file, delete_resource_dir
 
 
@@ -41,9 +40,6 @@ def get_requested_resource_jsons(args):
         "projection": {
             "allowed_types": (dict, ), "allow_none": True, "custom_validator": _validate_projection
         },
-        "linked_resources": {
-            "allowed_types": (dict, ), 'allow_none': True
-        },
         "sort_doc": {
             "allowed_types": (dict, list), "allow_none": True
         }
@@ -53,7 +49,6 @@ def get_requested_resource_jsons(args):
 
     selector_doc = args['selector_doc']
     projection = args['projection']
-    lrs_request_doc = args['linked_resources']
     sort_doc = args['sort_doc']
 
     ops = OrderedDict()
@@ -68,6 +63,8 @@ def get_requested_resource_jsons(args):
             g.objstore_colln, current_token.user_id,
             current_token.group_ids, selector_doc, projection=projection, ops=ops
         )
+        return resource_repr_jsons, 200
+
     except (TypeError, ValueError):
         error = error_response(message='arguments to operations seems invalid', code=400)
         abort_with_error_response(error)
@@ -75,14 +72,8 @@ def get_requested_resource_jsons(args):
         error = error_response(message='invalid arguments', code=400)
         abort_with_error_response(error)
 
-    if lrs_request_doc is not None:
-        # noinspection PyUnboundLocalVariable
-        for rj in resource_repr_jsons:
-            linked_resources = objstore_helper.get_linked_resource_ids(g.objstore_colln, rj['_id'], lrs_request_doc)
-            rj['linked_resources'] = linked_resources
-    return resource_repr_jsons
 
-
+#  deprecated
 @api.route('/resources')
 class Resources(flask_restplus.Resource):
 
@@ -94,7 +85,6 @@ class Resources(flask_restplus.Resource):
         help='syntax is same as mongo query_doc. https://docs.mongodb.com/manual/tutorial/query-documents/'
     )
     get_parser.add_argument('projection', location='args', type=str, help='ex: {"permissions": 0}')
-    get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str, help='ex: [["created": 1], ["title.chars": -1]]')
@@ -233,9 +223,7 @@ class Resources(flask_restplus.Resource):
 
         for resource_id in resource_ids:
             deleted, deleted_res_ids = objstore_helper.delete_tree(
-                g.objstore_colln, resource_id, current_token.user_id, current_token.group_ids)
-            for deleted_res_id in deleted_res_ids:
-                delete_resource_dir(deleted_res_id)
+                g.objstore_colln, g.data_dir_path, resource_id, current_token.user_id, current_token.group_ids)
             delete_report.append({
                 "deleted": deleted,
                 "deleted_resource_ids": deleted_res_ids
@@ -249,7 +237,6 @@ class Resources(flask_restplus.Resource):
 class ResourceObject(flask_restplus.Resource):
 
     get_parser = api.parser()
-    get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('projection', location='args', type=str)
     get_parser.add_argument(
         'Authorization', location='headers', type=str, required=False,
@@ -257,9 +244,6 @@ class ResourceObject(flask_restplus.Resource):
     )
 
     get_payload_json_parse_directives = {
-        "linked_resources": {
-            "allowed_types": (dict, ), "allow_none": True
-        },
         "projection": {
             "allowed_types": (dict, ), "allow_none": True, "custom_validator": _validate_projection
         }
@@ -271,7 +255,6 @@ class ResourceObject(flask_restplus.Resource):
         args = self.get_parser.parse_args()
         args = parse_json_args(args, self.get_payload_json_parse_directives)
 
-        lrs_request_doc = args['linked_resources']
         projection = args['projection']
 
         resource_json = g.objstore_colln.find_one(
@@ -285,20 +268,15 @@ class ResourceObject(flask_restplus.Resource):
             return error_response(message='permission denied', code=403)
 
         projection_helper.project_doc(resource_json, projection, in_place=True)
-
-        if lrs_request_doc is not None:
-            resource_json['linked_resources'] = objstore_helper.get_linked_resource_ids(
-                g.objstore_colln, resource_id, lrs_request_doc)
         return resource_json
 
 
-@api.route('/resources/<string:resource_id>/sections')
+@api.route('/resources/<string:resource_id>/specific_resources')
 class SpecificResources(flask_restplus.Resource):
 
     get_parser = api.parser()
     get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
-    get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str)
@@ -342,7 +320,7 @@ class SpecificResources(flask_restplus.Resource):
         selector_doc = objstore_helper.specific_resources_selector_doc(resource_id, custom_filter_doc=filter_doc)
 
         deleted_all, deleted_res_ids = objstore_helper.delete_selection(
-            g.objstore_colln, selector_doc, current_token.user_id, current_token.group_ids)
+            g.objstore_colln, g.data_dir_path, selector_doc, current_token.user_id, current_token.group_ids)
         return {
             "deleted_all": deleted_all,
             "deleted_res_ids": deleted_res_ids
@@ -355,7 +333,6 @@ class Annotations(flask_restplus.Resource):
     get_parser = api.parser()
     get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
     get_parser.add_argument('projection', location='args', type=str)
-    get_parser.add_argument('linked_resources', location='args', type=str)
     get_parser.add_argument('start', location='args', type=int)
     get_parser.add_argument('count', location='args', type=int)
     get_parser.add_argument('sort_doc', location='args', type=str)
@@ -399,7 +376,7 @@ class Annotations(flask_restplus.Resource):
         selector_doc = objstore_helper.annotations_selector_doc(resource_id, custom_filter_doc=filter_doc)
 
         deleted_all, deleted_res_ids = objstore_helper.delete_selection(
-            g.objstore_colln, selector_doc, current_token.user_id, current_token.group_ids)
+            g.objstore_colln, g.data_dir_path, selector_doc, current_token.user_id, current_token.group_ids)
         return {
             "deleted_all": deleted_all,
             "deleted_res_ids": deleted_res_ids
@@ -534,67 +511,9 @@ class ResolvedPermissions(flask_restplus.Resource):
         return resolved_permissions
 
 
-@api.route('/resources/<string:resource_id>/files')
-class Files(flask_restplus.Resource):
-
-    get_parser = api.parser()
-    get_parser.add_argument('filter_doc', location='args', type=str, default='{}')
-    get_parser.add_argument('projection', location='args', type=str)
-    get_parser.add_argument('start', location='args', type=int)
-    get_parser.add_argument('count', location='args', type=int)
-    get_parser.add_argument('sort_doc', location='args', type=str)
-    get_parser.add_argument(
-        'Authorization', location='headers', type=str, required=False,
-        help='should be in form of "Bearer <access_token>"'
-    )
-
-    post_parser = api.parser()
-    post_parser.add_argument('files', type=FileStorage, location='files', required=True)
-    post_parser.add_argument('files_purpose', type=str, location='form')
-    post_parser.add_argument(
-        'Authorization', location='headers', type=str, required=True,
-        help='should be in form of "Bearer <access_token>"'
-    )
-
-    @api.expect(get_parser, validate=True)
-    @require_oauth(token_required=False)
-    def get(self, resource_id):
-        args = self.get_parser.parse_args()
-
-        filter_doc = jsonify_argument(args['filter_doc'], key='filter_doc') or {}
-        check_argument_type(filter_doc, (dict,), key='filter_doc')
-        selector_doc = objstore_helper.files_selector_doc(resource_id, custom_filter_doc=filter_doc)
-        args['selector_doc'] = json.dumps(selector_doc)
-
-        return get_requested_resource_jsons(args)
-
-    @api.expect(post_parser, validate=True)
-    @require_oauth()
-    def post(self, resource_id):
-        args = self.post_parser.parse_args()
-
-        files = request.files.getlist("files")
-        purpose = args['files_purpose']
-        file_annotation_jsons = []
-        for f in files:
-            file_annotation_json = save_file(
-                g.objstore_colln, current_token.user_id, current_token.group_ids,
-                resource_id, f, purpose, initial_agents=g.initial_agents).to_json_map()
-            file_annotation_json.pop('body', None)
-            file_annotation_jsons.append(file_annotation_json)
-        return file_annotation_jsons
-
-
 # noinspection PyMethodMayBeStatic
 @api.route('/files/<string:file_id>')
 class LocalNamespaceFile(flask_restplus.Resource):
-
-    post_parser = api.parser()
-    post_parser.add_argument('file', type=FileStorage, location='files')
-    post_parser.add_argument(
-        'Authorization', location='headers', type=str, required=True,
-        help='should be in form of "Bearer <access_token>"'
-    )
 
     @require_oauth(token_required=False)
     def get(self, file_id):
@@ -619,14 +538,6 @@ class LocalNamespaceFile(flask_restplus.Resource):
         return send_from_directory(
             directory=file_dir, filename=file_name, mimetype=mimetype
         )
-
-    @require_oauth()
-    def delete(self, file_id):
-        try:
-            delete_resource_file(g.objstore_colln, current_token.user_id, current_token.group_ids, file_id)
-        except Exception as e:
-            return error_response(message=str(e), code=403)
-        return {"success": True}
 
 
 #  deprecated
@@ -745,6 +656,15 @@ class Graph(flask_restplus.Resource):
         'start_nodes_selector', type=str, location='args', required=True
     )
     get_parser.add_argument(
+        'start_nodes_sort_doc', location='args', type=str, help='ex: [["created": 1], ["title.chars": -1]]'
+    )
+    get_parser.add_argument(
+        'start_nodes_offset', location='args', type=int
+    )
+    get_parser.add_argument(
+        'start_nodes_count', location='args', type=int
+    )
+    get_parser.add_argument(
         'traverse_key_filter_maps_list', type=str, location='args', default='[{"source": {}, "target": {}}]'
     )
     get_parser.add_argument(
@@ -754,12 +674,17 @@ class Graph(flask_restplus.Resource):
         'max_hops', type=int, location='args', default=0
     )
     get_parser.add_argument(
+        'include_ool_data_graph', type=str, location='args', choices=['true', 'false'], default='false'
+    )
+    get_parser.add_argument(
         'json_class_projection_map', type=str, location='args', default=None
     )
 
     get_payload_json_parse_directives = {
         "start_nodes_selector": {"allowed_types": (dict, )},
+        "start_nodes_sort_doc": {"allowed_types": (list, ), "allow_none": True},
         "traverse_key_filter_maps_list": {"allowed_types": (list, )},
+        "include_ool_data_graph": {"allowed_types": (bool, ), "default": False},
         "json_class_projection_map": {"allowed_types": (dict, )}
     }
 
@@ -806,6 +731,15 @@ class Graph(flask_restplus.Resource):
             self.get_parser.parse_args(), self.get_payload_json_parse_directives)
 
         start_nodes_selector = args['start_nodes_selector']
+        start_nodes_sort_doc = args['start_nodes_sort_doc']
+
+        start_find_ops = OrderedDict()
+        if start_nodes_sort_doc is not None:
+            start_find_ops['sort'] = [start_nodes_sort_doc]
+        if args.get('start_nodes_offset', None) is not None:
+            start_find_ops['skip'] = [args['start_nodes_offset']]
+        if args.get('start_nodes_count', None) is not None:
+            start_find_ops['limit'] = [args['start_nodes_count']]
 
         traverse_key_filter_maps_list = args['traverse_key_filter_maps_list']
 
@@ -814,16 +748,26 @@ class Graph(flask_restplus.Resource):
                 return error_response(message='invalid traverse_key_filter_maps_list', code=400)
 
         json_class_projection_map = args['json_class_projection_map']
+        include_ool_data_graph = args['include_ool_data_graph']
 
         direction = args.get('direction')
         max_hops = args.get('max_hops', 0)
 
         graph, start_nodes_ids = objstore_graph_helper.get_graph(
-            g.objstore_colln, start_nodes_selector, {}, traverse_key_filter_maps_list, direction, max_hops,
+            g.objstore_colln, start_nodes_selector, start_find_ops, {}, traverse_key_filter_maps_list, direction, max_hops,
             current_token.user_id, current_token.group_ids)
+
         objstore_graph_helper.project_graph_nodes(graph, json_class_projection_map, in_place=True)
 
-        return {"graph": graph, "start_nodes_ids": start_nodes_ids}, 200
+        response = {"graph": graph, "start_nodes_ids": start_nodes_ids}
+
+        if include_ool_data_graph:
+            ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, graph, current_token.user_id, current_token.group_ids)
+
+            objstore_graph_helper.project_graph_nodes(ool_data_graph, json_class_projection_map, in_place=True)
+            response['ool_data_graph'] = ool_data_graph
+
+        return response, 200
 
     @api.expect(post_parser, validate=True)
     @require_oauth()
@@ -886,6 +830,15 @@ class Network(flask_restplus.Resource):
         'start_nodes_selector', type=str, location='args', required=True
     )
     get_parser.add_argument(
+        'start_nodes_sort_doc', location='args', type=str, help='ex: [["created": 1], ["title.chars": -1]]'
+    )
+    get_parser.add_argument(
+        'start_nodes_offset', location='args', type=int
+    )
+    get_parser.add_argument(
+        'start_nodes_count', location='args', type=int
+    )
+    get_parser.add_argument(
         'edge_filters_list', type=str, location='args', required=True
     )
     get_parser.add_argument(
@@ -898,12 +851,17 @@ class Network(flask_restplus.Resource):
         'max_hops', type=int, location='args', default=0
     )
     get_parser.add_argument(
+        'include_ool_data_graph', type=str, location='args', choices=['true', 'false'], default='false'
+    )
+    get_parser.add_argument(
         'json_class_projection_map', type=str, location='args', default=None
     )
 
     get_payload_json_parse_directives = {
         "start_nodes_selector": {"allowed_types": (dict, )},
+        "start_nodes_sort_doc": {"allowed_types": (list, ), "allow_none": True},
         "edge_filters_list": {"allowed_types": (list, )},
+        "include_ool_data_graph": {"allowed_types": (bool, ), "default": False},
         "json_class_projection_map": {"allowed_types": (dict, ), "default": {}}
     }
 
@@ -914,6 +872,16 @@ class Network(flask_restplus.Resource):
             self.get_parser.parse_args(), self.get_payload_json_parse_directives)
 
         start_nodes_selector = args['start_nodes_selector']
+        start_nodes_sort_doc = args['start_nodes_sort_doc']
+
+        start_find_ops = OrderedDict()
+        if start_nodes_sort_doc is not None:
+            start_find_ops['sort'] = [start_nodes_sort_doc]
+        if args.get('start_nodes_offset', None) is not None:
+            start_find_ops['skip'] = [args['start_nodes_offset']]
+        if args.get('start_nodes_count', None) is not None:
+            start_find_ops['limit'] = [args['start_nodes_count']]
+
         edge_filters_list = args['edge_filters_list']
 
         for ef in edge_filters_list:
@@ -921,21 +889,33 @@ class Network(flask_restplus.Resource):
                 return error_response(message='invalid edge_filters_list', code=400)
 
         json_class_projection_map = args['json_class_projection_map']
+        include_ool_data_graph = args['include_ool_data_graph']
 
         from_link_field = args.get('from_link_field')
         to_link_field = args.get('to_link_field')
         max_hops = args.get('max_hops', 0)
 
         network, start_nodes_ids = objstore_graph_helper.get_network(
-            g.objstore_colln, start_nodes_selector, {"nodes": {}, "edges": {}}, edge_filters_list,
+            g.objstore_colln, start_nodes_selector, start_find_ops, {"nodes": {}, "edges": {}}, edge_filters_list,
             from_link_field, to_link_field, max_hops, current_token.user_id, current_token.group_ids)
+
         objstore_graph_helper.project_graph_nodes(network['nodes'], json_class_projection_map, in_place=True)
         objstore_graph_helper.project_graph_nodes(network['edges'], json_class_projection_map, in_place=True)
 
-        return {
-            "network": network,
-            "start_nodes_ids": start_nodes_ids
-        }, 200
+        response = {"network": network, "start_nodes_ids": start_nodes_ids}
+
+        if include_ool_data_graph:
+            nodes_ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, network['nodes'], current_token.user_id, current_token.group_ids)
+
+            edges_ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, network['edges'], current_token.user_id, current_token.group_ids)
+
+            ool_data_graph = nodes_ool_data_graph
+            ool_data_graph.update(edges_ool_data_graph)
+            objstore_graph_helper.project_graph_nodes(ool_data_graph, json_class_projection_map, in_place=True)
+
+            response['ool_data_graph'] = ool_data_graph
+
+        return response, 200
 
 
 # noinspection PyMethodMayBeStatic
