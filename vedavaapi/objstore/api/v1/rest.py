@@ -3,6 +3,7 @@ import os
 import sys
 from collections import OrderedDict
 
+import flask
 import flask_restplus
 from flask import request, g
 from jsonschema import ValidationError
@@ -20,7 +21,6 @@ from vedavaapi.objectdb.helpers import objstore_helper, objstore_graph_helper, p
 from werkzeug.datastructures import FileStorage
 
 from . import api
-from ..files_helper import save_file, delete_resource_file, delete_resource_dir
 
 
 def _validate_projection(projection):
@@ -96,10 +96,7 @@ class Resources(flask_restplus.Resource):
     # post payload parser
     post_parser = api.parser()
     post_parser.add_argument('resources_list', location='form', type=str, required=True)
-    post_parser.add_argument('attachments', type=FileStorage, location='files')
-    post_parser.add_argument('attachments_infos', type=str, location='form')
     post_parser.add_argument('return_projection', location='form', type=str)
-    post_parser.add_argument('return_created_linked_resources', location='form', type=bool, default=True)
     post_parser.add_argument(
         'Authorization', location='headers', type=str, required=True,
         help='should be in form of "Bearer <access_token>"'
@@ -107,7 +104,6 @@ class Resources(flask_restplus.Resource):
 
     post_json_parse_directives = {
         "resources_list": {"allowed_types": (list, )},
-        "attachments_infos": {"allowed_infos": (list, ), "allow_none": True},
         "return_projection": {
             "allowed_types": (dict, ), "allow_none": True, "custom_validator": _validate_projection
         }
@@ -140,17 +136,6 @@ class Resources(flask_restplus.Resource):
         resource_jsons = args['resource_jsons']
         return_projection = args['return_projection']
 
-        attachments_infos = args['attachments_infos']
-        if attachments_infos is not None and len(attachments_infos) != len(resource_jsons):
-            return error_response(
-                message='attachments_infos should have one-to-one correspondence with resources', code=403
-            )
-
-        files = request.files.getlist("attachments")
-        files_index = dict((f.filename, f) for f in files)
-
-        return_created_lrs = args.get('return_created_linked_resources', True)
-
         created_resource_jsons = []
         for n, rj in enumerate(resource_jsons):
             try:
@@ -168,33 +153,6 @@ class Resources(flask_restplus.Resource):
                     created_resource_id,
                     projection=projection_helper.modified_projection(return_projection, ["_id", "jsonClass"]))
                 created_resource_jsons.append(created_resource_json)
-
-                if not attachments_infos:
-                    continue
-                resource_attachments_info = attachments_infos[n]
-                if not isinstance(resource_attachments_info, list):
-                    return error_response(
-                        message='attachments_info corresponding to each resource should be list', code=400)
-
-                created_linked_resource_ids = {"files": []}
-                for attachment_details in resource_attachments_info:
-                    if not isinstance(attachment_details, dict) or (
-                            'file_name' not in attachment_details or 'purpose' not in attachment_details):
-                        return error_response(message='invalid attachment_details for resource {}'.format(n), code=400)
-
-                    attachment_file_name = attachment_details['file_name']
-                    attachment_purpose = attachment_details['purpose']
-                    if attachment_file_name not in files_index:
-                        continue
-                    file_anno = save_file(
-                        g.objstore_colln, current_token.user_id, current_token.group_ids, created_resource_id,
-                        files_index[attachment_file_name], attachment_purpose, initial_agents=g.initial_agents
-                    )
-                    # noinspection PyProtectedMember
-                    created_linked_resource_ids['files'].append(file_anno._id)
-
-                if return_created_lrs:
-                    created_resource_json['created_linked_resources'] = created_linked_resource_ids
 
             except ObjModelException as e:
                 return error_response(
@@ -513,7 +471,7 @@ class ResolvedPermissions(flask_restplus.Resource):
 
 # noinspection PyMethodMayBeStatic
 @api.route('/files/<string:file_id>')
-class LocalNamespaceFile(flask_restplus.Resource):
+class File(flask_restplus.Resource):
 
     @require_oauth(token_required=False)
     def get(self, file_id):
@@ -525,19 +483,31 @@ class LocalNamespaceFile(flask_restplus.Resource):
                 ool_data, ObjectPermissions.READ, current_token.user_id, current_token.group_ids, g.objstore_colln):
             return error_response(message='permission denied', code=403)
 
-        if ool_data['namespace'] != '_local':
-            return error_response(message='this ool data not belongs to _local namespace.', code=404)
+        namespace = ool_data.get('namespace', None)
+        identifier = ool_data.get('identifier', None)
+        url = ool_data.get('url', None)
 
-        local_namespace_data = ool_data.get('namespaceData', {})
-        mimetype = local_namespace_data.get('mimetype', None)
-        print({"mimetype": mimetype}, file=sys.stderr)
+        if None in (namespace, identifier, url):
+            return error_response(message='resource is not ool_data', code=404)
 
-        file_dir = g.data_dir_path
-        file_name = os.path.basename(file_id)
-        from flask import send_from_directory
-        return send_from_directory(
-            directory=file_dir, filename=file_name, mimetype=mimetype
-        )
+        if namespace == '_vedavaapi':
+            local_namespace_data = ool_data.get('namespaceData', {})
+            mimetype = local_namespace_data.get('mimetype', None)
+            print({"mimetype": mimetype}, file=sys.stderr)
+
+            file_path = os.path.join(g.data_dir_path, identifier.lstrip('/'))
+            if not os.path.isfile(file_path):
+                return error_response(message='no representation available', code=404)
+
+            file_dir = os.path.dirname(file_path)
+            file_name = os.path.basename(file_path)
+
+            from flask import send_from_directory
+            return send_from_directory(
+                directory=file_dir, filename=file_name, mimetype=mimetype
+            )
+        else:
+            return flask.redirect(url)
 
 
 #  deprecated
@@ -754,15 +724,16 @@ class Graph(flask_restplus.Resource):
         max_hops = args.get('max_hops', 0)
 
         graph, start_nodes_ids = objstore_graph_helper.get_graph(
-            g.objstore_colln, start_nodes_selector, start_find_ops, {}, traverse_key_filter_maps_list, direction, max_hops,
-            current_token.user_id, current_token.group_ids)
+            g.objstore_colln, start_nodes_selector, start_find_ops, {}, traverse_key_filter_maps_list, direction,
+            max_hops, current_token.user_id, current_token.group_ids)
 
         objstore_graph_helper.project_graph_nodes(graph, json_class_projection_map, in_place=True)
 
         response = {"graph": graph, "start_nodes_ids": start_nodes_ids}
 
         if include_ool_data_graph:
-            ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, graph, current_token.user_id, current_token.group_ids)
+            ool_data_graph = objstore_graph_helper.get_ool_data_graph(
+                g.objstore_colln, graph, current_token.user_id, current_token.group_ids)
 
             objstore_graph_helper.project_graph_nodes(ool_data_graph, json_class_projection_map, in_place=True)
             response['ool_data_graph'] = ool_data_graph
@@ -905,9 +876,13 @@ class Network(flask_restplus.Resource):
         response = {"network": network, "start_nodes_ids": start_nodes_ids}
 
         if include_ool_data_graph:
-            nodes_ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, network['nodes'], current_token.user_id, current_token.group_ids)
+            nodes_ool_data_graph = objstore_graph_helper.get_ool_data_graph(
+                g.objstore_colln, network['nodes'], current_token.user_id, current_token.group_ids
+            )
 
-            edges_ool_data_graph = objstore_graph_helper.get_ool_data_graph(g.objstore_colln, network['edges'], current_token.user_id, current_token.group_ids)
+            edges_ool_data_graph = objstore_graph_helper.get_ool_data_graph(
+                g.objstore_colln, network['edges'], current_token.user_id, current_token.group_ids
+            )
 
             ool_data_graph = nodes_ool_data_graph
             ool_data_graph.update(edges_ool_data_graph)

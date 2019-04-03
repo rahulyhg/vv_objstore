@@ -5,7 +5,7 @@ import os
 from vedavaapi.objectdb.mydb import MyDbCollection
 from vedavaapi.common import VedavaapiService, OrgHandler
 
-from .helpers.iiif_helper import ObjstoreFSHelper, ObjstorePreziInterface
+from .helpers.iiif_helper import ObjstoreFSInterface, ObjstoreIIIFModelInterface
 from .helpers.bootstrap_helper import bootstrap_initial_resources
 
 
@@ -31,33 +31,20 @@ class ObjstoreOrgHandler(OrgHandler):
         )
         self.initial_agents = None
 
-    def prezi_interface(self):
+    def get_iiif_model_interface(self):
         if not hasattr(self, 'iiif_prezi_interface'):
-            self.iiif_prezi_interface = ObjstorePreziInterface(self.org_name)
-        return self.iiif_prezi_interface
+            self.iiif_model_interface = ObjstoreIIIFModelInterface(self.org_name)
+        return self.iiif_model_interface
 
-    def fs_helper(self):
+    def get_fs_interface(self):
         if not hasattr(self, 'files_helper'):
-            self.files_helper = ObjstoreFSHelper(self.org_name)
-        return self.files_helper
+            self.fs_interface = ObjstoreFSInterface(self.org_name)
+        return self.fs_interface
 
     def data_dir_path(self):
         return self.store.file_store_path(
             file_store_type='data',
             base_path=''
-        )
-
-    def resource_dir_path(self, resource_id):
-        return self.store.file_store_path(
-            file_store_type='data',
-            base_path=resource_id
-        )
-
-    def resource_file_path(self, resource_id, file_name):
-        base_path = os.path.join(resource_id.lstrip('/'), file_name.lstrip('/'))
-        return self.store.file_store_path(
-            file_store_type='data',
-            base_path=base_path
         )
 
     def initialize(self):
@@ -96,14 +83,8 @@ class VedavaapiObjstore(VedavaapiService):
     def root_dir_path(self, org_name):
         return self.get_org(org_name).root_dir_path
 
-    def resource_dir_path(self, org_name, resource_id):
-        return self.get_org(org_name).resource_dir_path(resource_id)
+    def iiif_model_interface(self, org_name):
+        return self.get_org(org_name).get_iiif_model_interface()
 
-    def resource_file_path(self, org_name, resource_id, file_name):
-        return self.get_org(org_name).resource_file_path(resource_id, file_name)
-
-    def prezi_interface(self, org_name):
-        return self.get_org(org_name).prezi_interface()
-
-    def fs_helper(self, org_name):
-        return self.get_org(org_name).fs_helper()
+    def fs_interface(self, org_name):
+        return self.get_org(org_name).get_fs_interface()
