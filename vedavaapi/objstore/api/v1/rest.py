@@ -95,7 +95,7 @@ class Resources(flask_restplus.Resource):
 
     # post payload parser
     post_parser = api.parser()
-    post_parser.add_argument('resources_list', location='form', type=str, required=True)
+    post_parser.add_argument('resource_jsons', location='form', type=str, required=True)
     post_parser.add_argument('return_projection', location='form', type=str)
     post_parser.add_argument(
         'Authorization', location='headers', type=str, required=True,
@@ -103,7 +103,7 @@ class Resources(flask_restplus.Resource):
     )
 
     post_json_parse_directives = {
-        "resources_list": {"allowed_types": (list, )},
+        "resource_jsons": {"allowed_types": (list, )},
         "return_projection": {
             "allowed_types": (dict, ), "allow_none": True, "custom_validator": _validate_projection
         }
